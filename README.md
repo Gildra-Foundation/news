@@ -59,23 +59,23 @@
 ```mermaid
 flowchart LR
     subgraph Sources["📡 Источники"]
-        S1[Telegram-каналы]
-        S2[X / Twitter]
-        S3[Reddit]
-        S4[GitHub]
+        S1["Telegram-каналы"]
+        S2["X / Twitter"]
+        S3["Reddit"]
+        S4["GitHub"]
     end
 
     subgraph Bot["🤖 newsbot"]
-        TR[Telethon<br/>userbot]
-        EXT[external_fetch<br/>FxTwitter / Reddit JSON]
-        AI[Gemini<br/>filter + rewrite]
-        RP[Pillow<br/>render_post]
-        DB[(SQLite<br/>WAL)]
-        TG[aiogram<br/>Bot API]
+        TR["Telethon<br/>userbot"]
+        EXT["external_fetch<br/>FxTwitter / Reddit JSON"]
+        AI["Gemini<br/>filter + rewrite"]
+        RP["Pillow<br/>render_post"]
+        DB[("SQLite<br/>WAL")]
+        TG["aiogram<br/>Bot API"]
     end
 
     subgraph Output["📰 Канал"]
-        CH[@runeuronews]
+        CH["@runeuronews"]
     end
 
     S1 --> TR --> AI
@@ -98,7 +98,7 @@ sequenceDiagram
     participant DB as SQLite
     participant AI as Gemini
     participant Bot as Bot API
-    participant CH as @runeuronews
+    participant CH as Канал
 
     Src->>TR: NewMessage event
     TR->>DB: claim_message (atomic INSERT OR IGNORE)
@@ -216,7 +216,9 @@ docker compose up -d --force-recreate
 
 ## 🏷️ Premium-эмодзи
 
-37 анимированных эмодзи из набора [@NewsEmoji](https://t.me/addemoji/NewsEmoji) и AI-логотипов — встраиваются перед заголовком каждого поста через `<tg-emoji emoji-id="…">` теги.
+37 анимированных эмодзи встраиваются перед заголовком каждого поста через `<tg-emoji emoji-id="…">` теги.
+
+> 🗂️ Каталог ID и подробный гайд по premium-эмодзи в Telegram-ботах — отдельный репозиторий: **[Zulut30/premium-telegram-emoji](https://github.com/Zulut30/premium-telegram-emoji)**. Там полный список айдишников (новостные эмодзи, лого приложений, AI-компании, языки программирования), способы получить ID и примеры кода.
 
 ### Категории
 
@@ -365,6 +367,17 @@ MAX_POSTS_PER_RUN=3
 - ✅ SQLite в WAL-режиме, безопасные транзакции
 - ✅ FloodWait и rate-limit обрабатываются с retry
 - ✅ `mem_limit` 512MB — при утечке OOM-killer прибьёт контейнер, `restart: unless-stopped` поднимет
+
+---
+
+## 🧱 Построено с использованием
+
+| Репозиторий | Что даёт |
+|---|---|
+| **[BotForge / telegram-skills](https://github.com/Zulut30/telegram-skills)** | Skill pack для AI-ассистентов (Claude Code, Cursor, Codex), который превращает LLM в senior Telegram-bot-инженера: модульная архитектура, Bot API 9.6, rate-limits, Docker, миграции — всё по канону, без монолитов |
+| **[premium-telegram-emoji](https://github.com/Zulut30/premium-telegram-emoji)** | Каталог premium-эмодзи Telegram с custom-emoji-id, готовыми HTML-сниппетами и гайдом «как заставить бот отправлять анимированные эмодзи в каналы» |
+
+Оба репозитория поддерживает [@Zulut30](https://github.com/Zulut30).
 
 ---
 
