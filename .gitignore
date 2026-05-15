@@ -1,0 +1,11 @@
+.env
+*.session
+*.session-journal
+newsbot.db
+data/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
+.claude/

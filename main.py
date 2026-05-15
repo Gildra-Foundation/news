@@ -1,0 +1,914 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import os.path
+import re
+import tempfile
+
+from aiogram import F
+from aiogram.enums import MessageEntityType
+from aiogram.exceptions import TelegramAPIError
+from aiogram.filters import Command
+from aiogram.types import (
+    CallbackQuery,
+    FSInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from telethon import events
+
+import external_fetch
+import render_post
+
+LINK_RE = re.compile(r"(?:https?://)?t\.me/(c/)?([\w_]+)/(\d+)", re.IGNORECASE)
+
+import ai
+import config
+import db
+import digest as digest_mod
+import emoji_store
+import pipeline
+import tg_reader
+import tg_writer
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+# Глушим шумные библиотеки — оставляем только WARNING+
+for noisy in (
+    "telethon",
+    "telethon.network",
+    "telethon.network.mtprotosender",
+    "aiogram",
+    "aiogram.dispatcher",
+    "aiogram.event",
+    "apscheduler",
+    "apscheduler.scheduler",
+    "apscheduler.executors.default",
+    "httpx",
+    "httpcore",
+    "google_genai",
+    "google_genai.models",
+):
+    logging.getLogger(noisy).setLevel(logging.WARNING)
+
+log = logging.getLogger("newsbot")
+
+INITIAL_SOURCES = [
+    "openai_fan",
+    "neuraldvig",
+    "ai_newz",
+    "gpt_news",
+    "iSimplify",
+    "tips_ai",
+    "NeuralShit",
+    "gptpublic",
+]
+ALBUM_DEBOUNCE_SECONDS = 2.5
+
+STATUS_EMOJI = {
+    "published": "✅",
+    "filtered": "🚫",
+    "already_published": "🔁",
+    "publish_failed": "⚠️",
+    "ai_error": "⚠️",
+    "error": "⚠️",
+}
+
+STATUS_LABEL = {
+    "published": "Опубликовано",
+    "filtered": "Отклонено",
+    "already_published": "Уже публиковали",
+    "publish_failed": "Ошибка публикации",
+    "ai_error": "Ошибка Gemini",
+    "error": "Ошибка обработки",
+}
+
+
+def _html_escape(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _format_admin_notice(result) -> str:
+    emoji = STATUS_EMOJI.get(result.status, "•")
+    label = STATUS_LABEL.get(result.status, result.status)
+    link = f"https://t.me/{result.channel}/{result.message_id}"
+    lines = [f"{emoji} <b>{label}</b>", f'<a href="{link}">@{result.channel}/{result.message_id}</a>']
+    if result.title:
+        lines.append(f"\n📌 {_html_escape(result.title)}")
+    if result.reason:
+        lines.append(f"\n💭 {_html_escape(result.reason)}")
+    return "\n".join(lines)
+
+
+async def main() -> None:
+    cfg = config.load()
+    os.makedirs("data", exist_ok=True)
+    await db.init()
+    await db.seed_sources(INITIAL_SOURCES)
+
+    if not os.path.exists(f"{tg_reader.SESSION_NAME}.session"):
+        log.error(
+            "Не найден файл сессии Telethon (%s.session). "
+            "Запустите сначала: docker compose run --rm newsbot python init_session.py",
+            tg_reader.SESSION_NAME,
+        )
+        return
+
+    tele_client = tg_reader.make_client(cfg.tg_api_id, cfg.tg_api_hash)
+    await tele_client.start()
+    me = await tele_client.get_me()
+    log.info("Telethon авторизован как %s (id=%s)", me.first_name, me.id)
+
+    bot = tg_writer.make_bot(cfg.bot_token)
+    dp = tg_writer.make_dispatcher(cfg.admin_user_id, cfg.target_channel)
+
+    # Автоподписка на источники, чтобы NewMessage events приходили
+    sources = await db.list_sources()
+    for src in sources:
+        await tg_reader.ensure_joined(tele_client, src)
+
+    # ------- Real-time обработчик -------
+    album_buffers: dict[int, list] = {}
+
+    async def _notify_admin(result) -> None:
+        if cfg.admin_user_id == 0 or result.status == "duplicate":
+            return
+        try:
+            await bot.send_message(
+                chat_id=cfg.admin_user_id,
+                text=_format_admin_notice(result),
+                disable_web_page_preview=True,
+            )
+        except Exception as e:
+            log.warning("Не удалось отправить уведомление админу: %s", e)
+
+    async def _process_messages(channel: str, msgs: list) -> None:
+        post = tg_reader.build_post_from_messages(channel, msgs)
+        if not post:
+            return
+        try:
+            result = await pipeline.process_post(tele_client, bot, cfg, post)
+            log.info("real-time @%s/%s -> %s", post.channel, post.message_id, result.status)
+            await _notify_admin(result)
+        except Exception:
+            log.exception("Ошибка real-time обработки @%s/%s", post.channel, post.message_id)
+
+    async def _flush_album(grouped_id: int, channel: str) -> None:
+        await asyncio.sleep(ALBUM_DEBOUNCE_SECONDS)
+        msgs = album_buffers.pop(grouped_id, [])
+        if msgs:
+            await _process_messages(channel, msgs)
+
+    @tele_client.on(events.NewMessage(incoming=True))
+    async def realtime_handler(event):
+        try:
+            chat = await event.get_chat()
+            username = (getattr(chat, "username", None) or "").lower()
+            if not username:
+                return
+            current = set(await db.list_sources())
+            if username not in current:
+                return
+
+            msg = event.message
+            if not msg:
+                return
+
+            if msg.grouped_id:
+                first_in_group = msg.grouped_id not in album_buffers
+                album_buffers.setdefault(msg.grouped_id, []).append(msg)
+                if first_in_group:
+                    asyncio.create_task(_flush_album(msg.grouped_id, username))
+            else:
+                await _process_messages(username, [msg])
+        except Exception:
+            log.exception("Ошибка в realtime_handler")
+
+    log.info("Real-time обработчик зарегистрирован")
+
+    # ------- Команды бота -------
+    def _is_admin(message: Message) -> bool:
+        return cfg.admin_user_id != 0 and (
+            message.from_user is not None and message.from_user.id == cfg.admin_user_id
+        )
+
+    @dp.message(Command("run"))
+    async def cmd_run(message: Message) -> None:
+        if not _is_admin(message):
+            return
+        await message.answer("Запускаю прогон…")
+        result = await pipeline.run_once(tele_client, bot, cfg, on_result=_notify_admin)
+        if result.get("error"):
+            await message.answer(
+                f"Готово с ошибкой.\nПолучено: {result['fetched']}, "
+                f"отобрано: {result['selected']}, опубликовано: {result['published']}\n"
+                f"Ошибка: {result['error']}"
+            )
+        else:
+            await message.answer(
+                f"Готово.\nПолучено: {result['fetched']}, "
+                f"отобрано: {result['selected']}, опубликовано: {result['published']}"
+            )
+
+    @dp.message(Command("digest"))
+    async def cmd_digest(message: Message) -> None:
+        if not _is_admin(message):
+            return
+        await message.answer("Собираю еженедельный дайджест…")
+        result = await digest_mod.build_and_publish(bot, cfg)
+        if result.get("published"):
+            await message.answer(
+                f"✅ Дайджест опубликован. Пунктов: {result.get('posts_count', 0)}"
+            )
+        else:
+            await message.answer(f"⚠️ Не удалось: {result.get('reason')}")
+
+    @dp.message(Command("test"))
+    async def cmd_test(message: Message) -> None:
+        if not _is_admin(message):
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        src_list = await db.list_sources()
+        if not src_list:
+            await message.answer("Нет источников.")
+            return
+
+        if len(parts) > 1:
+            target = parts[1].strip().lstrip("@").lower()
+            candidates = [target]
+        else:
+            candidates = src_list
+
+        post = None
+        used = None
+        for ch in candidates:
+            post = await tg_reader.fetch_latest_one(tele_client, ch)
+            if post:
+                used = ch
+                break
+
+        if not post:
+            await message.answer(
+                f"Не нашёл текстовых постов в {', '.join('@' + c for c in candidates)}."
+            )
+            return
+
+        await message.answer(
+            f"Беру пост https://t.me/{used}/{post.message_id} "
+            f"(медиа: {len(post.media_messages)}), рерайт через Gemini…"
+        )
+
+        try:
+            rewrite = await ai.rewrite_only(cfg.gemini_api_key, cfg.gemini_model, post.text)
+        except Exception as e:
+            log.exception("Gemini rewrite failed")
+            await message.answer(f"Gemini ошибка: {type(e).__name__}: {e}")
+            return
+
+        if not rewrite:
+            await message.answer("Gemini вернул некорректный ответ.")
+            return
+
+        emap = emoji_store.load()
+        override = emoji_store.detect_override(
+            emap, f"{rewrite.title}\n{rewrite.body}",
+        )
+        text = tg_writer.format_post(
+            rewrite.title, rewrite.body,
+            emoji_theme=override or "",
+            emoji_map=emap,
+            hashtag_key=rewrite.hashtag,
+        )
+        with tempfile.TemporaryDirectory(prefix="newsbot_test_") as tmpdir:
+            media_files = await tg_reader.download_post_media(tele_client, post, tmpdir)
+            target_msg_id = await tg_writer.publish(bot, cfg.target_channel, text, media_files)
+        if target_msg_id:
+            await db.mark_seen(post.channel, post.message_id)
+            # Записываем в published_posts чтобы дайджест мог сослаться
+            await db.record_published(
+                post.channel, post.message_id, rewrite.title, rewrite.body,
+                target_message_id=target_msg_id,
+            )
+            await message.answer(
+                f"Опубликовано в {cfg.target_channel} (медиа: {len(media_files)})."
+            )
+        else:
+            await message.answer("Ошибка публикации (см. логи).")
+
+    @dp.message(F.text.regexp(LINK_RE))
+    async def cmd_link(message: Message) -> None:
+        if not _is_admin(message):
+            return
+        m = LINK_RE.search(message.text or "")
+        if not m:
+            return
+        is_private = bool(m.group(1))
+        chan_raw = m.group(2)
+        msg_id = int(m.group(3))
+
+        if is_private:
+            await message.answer(
+                "Приватные каналы (t.me/c/...) пока не поддерживаются. "
+                "Пришлите ссылку из публичного канала."
+            )
+            return
+
+        channel = chan_raw.lower()
+        await message.answer(f"Беру пост https://t.me/{channel}/{msg_id} …")
+
+        post = await tg_reader.fetch_post_by_link(tele_client, channel, msg_id)
+        if not post:
+            await message.answer(
+                "Не получил пост: канал может быть приватным, поста нет или у userbot нет доступа."
+            )
+            return
+
+        try:
+            result = await pipeline.process_post(tele_client, bot, cfg, post, force=True)
+        except Exception as e:
+            log.exception("force process_post failed")
+            await message.answer(f"⚠️ Ошибка: {type(e).__name__}: {e}")
+            return
+
+        # Краткий ответ на исходное сообщение + полное уведомление
+        emoji = STATUS_EMOJI.get(result.status, "•")
+        label = STATUS_LABEL.get(result.status, result.status)
+        await message.answer(f"{emoji} {label}")
+        await _notify_admin(result)
+
+    # ------- X / Reddit / GitHub: парсинг ссылки, превью с кнопками -------
+    # Состояние ожидания инструкции на правку хранится в db.pending_edits —
+    # выживает при рестарте, чистится `_scheduled_cleanup`.
+
+    def _draft_kb(draft_id: int, include_original: bool = False) -> InlineKeyboardMarkup:
+        orig_label = "✓ Оригинал в посте" if include_original else "🔗 Оригинал в посте"
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"edit:{draft_id}"),
+                InlineKeyboardButton(text="✅ Опубликовать", callback_data=f"pub:{draft_id}"),
+            ],
+            [
+                InlineKeyboardButton(text=orig_label, callback_data=f"orig:{draft_id}"),
+                InlineKeyboardButton(text="❌ Отменить", callback_data=f"cancel:{draft_id}"),
+            ],
+        ])
+
+    def _photo_arg(image_ref: str | None):
+        """URL → строка, локальный путь → FSInputFile. None — нет фото."""
+        if not image_ref:
+            return None
+        if image_ref.startswith("http://") or image_ref.startswith("https://"):
+            return image_ref
+        if os.path.isfile(image_ref):
+            return FSInputFile(image_ref)
+        return None
+
+    def _draft_tail_url(draft: dict) -> str | None:
+        """Для GitHub-черновиков всегда добавляем ссылку на репо в конце."""
+        src = draft.get("source_url") or ""
+        if src.startswith("https://github.com") or src.startswith("http://github.com"):
+            return src
+        return None
+
+    def _format_draft_text(draft: dict) -> str:
+        """Сборка текста поста с premium-эмодзи (auto-override по компаниям/языкам)."""
+        original_url = draft["source_url"] if draft.get("include_original") else None
+        emap = emoji_store.load()
+        override = emoji_store.detect_override(
+            emap, f"{draft.get('title','')}\n{draft.get('body','')}",
+        )
+        return tg_writer.format_post(
+            draft["title"], draft["body"],
+            emoji_theme=override or "",
+            emoji_map=emap,
+            original_url=original_url,
+            tail_url=_draft_tail_url(draft),
+            hashtag_key=draft.get("hashtag") or "",
+        )
+
+    async def _send_preview(chat_id: int, draft_id: int) -> None:
+        draft = await db.get_draft(draft_id)
+        if not draft:
+            await bot.send_message(chat_id, "Черновик не найден.")
+            return
+        text = _format_draft_text(draft)
+        kb = _draft_kb(draft_id, include_original=draft.get("include_original", False))
+        media = _photo_arg(draft["image_url"])
+        media_type = draft.get("media_type") or "photo"
+        sent = False
+        if media:
+            try:
+                if media_type == "video":
+                    await bot.send_video(
+                        chat_id=chat_id, video=media, caption=text, reply_markup=kb,
+                    )
+                else:
+                    await bot.send_photo(
+                        chat_id=chat_id, photo=media, caption=text, reply_markup=kb,
+                    )
+                sent = True
+            except TelegramAPIError as e:
+                log.warning("Не удалось отправить превью с медиа: %s — fallback text", e)
+        if not sent:
+            await bot.send_message(
+                chat_id=chat_id, text=text, reply_markup=kb,
+                disable_web_page_preview=True,
+            )
+
+    @dp.message(F.text.regexp(external_fetch.EXTERNAL_RE))
+    async def cmd_external_url(message: Message) -> None:
+        if not _is_admin(message):
+            return
+        m = external_fetch.EXTERNAL_RE.search(message.text or "")
+        if not m:
+            return
+        url = m.group(0)
+        await message.answer(f"Беру пост из {url}…")
+
+        post = await external_fetch.fetch(url)
+        if not post:
+            await message.answer(
+                "Не получилось вытянуть пост. Возможно, он удалён, приватный, "
+                "или сервис парсинга временно недоступен."
+            )
+            return
+
+        if post.source == "github":
+            rewrite = await ai.summarize_github(
+                api_key=cfg.gemini_api_key,
+                model=cfg.gemini_model,
+                source_text=post.text,
+            )
+        else:
+            rewrite = await ai.translate_and_format(
+                api_key=cfg.gemini_api_key,
+                model=cfg.gemini_model,
+                source_text=post.text,
+            )
+        if not rewrite:
+            await message.answer(
+                "Gemini не справился с обработкой. Попробуйте ещё раз."
+            )
+            return
+
+        # Если в посте есть фото/видео — берём ИХ, без рендера скриншота
+        if post.media_type in ("photo", "video") and post.media_url:
+            draft_id = await db.create_draft(
+                source_url=post.source_url,
+                title=rewrite.title,
+                body=rewrite.body,
+                image_url=post.media_url,
+                original_text=post.text,
+                media_type=post.media_type,
+                hashtag=rewrite.hashtag,
+            )
+        else:
+            # Текстовый пост (X/Reddit) или GitHub-репо — рендерим карточку
+            draft_id = await db.create_draft(
+                source_url=post.source_url,
+                title=rewrite.title,
+                body=rewrite.body,
+                image_url=None,
+                original_text=post.text,
+                media_type="photo",
+                hashtag=rewrite.hashtag,
+            )
+            screenshot_path: str | None = None
+            try:
+                screenshot_path = render_post.screenshot_path_for(draft_id)
+                if post.source == "twitter":
+                    # Подкачиваем аватарку автора (если есть)
+                    avatar_path = None
+                    avatar_url = post.meta.get("avatar_url") or ""
+                    if avatar_url:
+                        avatar_path = render_post.screenshot_path_for(draft_id) + ".avatar"
+                        if not await external_fetch.download_avatar(avatar_url, avatar_path):
+                            avatar_path = None
+                    render_post.render_tweet(
+                        text=post.text,
+                        author_name=post.author or post.screen_name or "X",
+                        screen_name=post.screen_name or "x",
+                        dest_path=screenshot_path,
+                        avatar_path=avatar_path,
+                        verified=bool(post.meta.get("verified")),
+                    )
+                    if avatar_path and os.path.exists(avatar_path):
+                        try:
+                            os.remove(avatar_path)
+                        except OSError:
+                            pass
+                elif post.source == "github":
+                    render_post.render_github(
+                        full_name=post.title or "",
+                        description=post.meta.get("description") or "",
+                        language=post.meta.get("language") or "",
+                        stars=post.meta.get("stars") or 0,
+                        forks=post.meta.get("forks") or 0,
+                        topics=post.meta.get("topics") or [],
+                        dest_path=screenshot_path,
+                    )
+                else:  # reddit
+                    render_post.render_reddit(
+                        title=post.title or "",
+                        body=(post.text[len(post.title) + 2:]
+                              if post.title and post.text.startswith(post.title) else ""),
+                        subreddit=post.subreddit,
+                        author=post.author or "",
+                        dest_path=screenshot_path,
+                    )
+            except Exception:
+                log.exception("Не удалось отрендерить карточку")
+                screenshot_path = None
+            if screenshot_path:
+                await db.set_draft_image(draft_id, screenshot_path)
+        await _send_preview(message.chat.id, draft_id)
+
+    @dp.callback_query(F.data.startswith("pub:"))
+    async def cb_publish(callback: CallbackQuery) -> None:
+        if cfg.admin_user_id and (not callback.from_user or callback.from_user.id != cfg.admin_user_id):
+            await callback.answer("⛔ Только для админа", show_alert=True)
+            return
+        try:
+            draft_id = int(callback.data.split(":", 1)[1])
+        except (ValueError, IndexError):
+            await callback.answer("Битый callback")
+            return
+        draft = await db.get_draft(draft_id)
+        if not draft:
+            await callback.answer("Черновик не найден или уже опубликован", show_alert=True)
+            return
+
+        text = _format_draft_text(draft)
+        media = _photo_arg(draft["image_url"])
+        media_type = draft.get("media_type") or "photo"
+        target_msg_id: int | None = None
+        try:
+            if media:
+                if media_type == "video":
+                    sent = await bot.send_video(
+                        chat_id=cfg.target_channel, video=media, caption=text,
+                    )
+                else:
+                    sent = await bot.send_photo(
+                        chat_id=cfg.target_channel, photo=media, caption=text,
+                    )
+                target_msg_id = sent.message_id
+            else:
+                sent = await bot.send_message(
+                    chat_id=cfg.target_channel,
+                    text=text,
+                    disable_web_page_preview=True,
+                )
+                target_msg_id = sent.message_id
+        except TelegramAPIError as e:
+            log.exception("publish from draft failed")
+            await callback.answer(f"Ошибка: {e}", show_alert=True)
+            return
+
+        # Зафиксировать в published_posts для дедупа и дайджеста
+        await db.record_published(
+            channel="manual", message_id=draft_id,
+            title=draft["title"], body=draft["body"],
+            target_message_id=target_msg_id,
+        )
+        # Удаляем черновик и временный скриншот (если был локальный файл)
+        if draft.get("image_url"):
+            ref = draft["image_url"]
+            if not (ref.startswith("http://") or ref.startswith("https://")):
+                render_post.cleanup_screenshot(ref)
+        await db.delete_draft(draft_id)
+        # Убрать кнопки на превью
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except TelegramAPIError:
+            pass
+        await callback.answer("Опубликовано")
+        await bot.send_message(
+            chat_id=callback.from_user.id,
+            text=f"✅ Опубликовано в {cfg.target_channel}",
+        )
+
+    @dp.callback_query(F.data.startswith("edit:"))
+    async def cb_edit(callback: CallbackQuery) -> None:
+        if cfg.admin_user_id and (not callback.from_user or callback.from_user.id != cfg.admin_user_id):
+            await callback.answer("⛔ Только для админа", show_alert=True)
+            return
+        try:
+            draft_id = int(callback.data.split(":", 1)[1])
+        except (ValueError, IndexError):
+            await callback.answer("Битый callback")
+            return
+        if not await db.get_draft(draft_id):
+            await callback.answer("Черновик не найден", show_alert=True)
+            return
+        await db.set_pending_edit(callback.from_user.id, draft_id)
+        await callback.answer()
+        await bot.send_message(
+            chat_id=callback.from_user.id,
+            text=(
+                "✏️ Опишите правку отдельным сообщением.\n"
+                "Например: «перевод неточный, replicate ≠ повторить», "
+                "«сделай title короче», «добавь акцент на цену»."
+            ),
+        )
+
+    @dp.callback_query(F.data.startswith("cancel:"))
+    async def cb_cancel(callback: CallbackQuery) -> None:
+        if cfg.admin_user_id and (not callback.from_user or callback.from_user.id != cfg.admin_user_id):
+            await callback.answer("⛔ Только для админа", show_alert=True)
+            return
+        try:
+            draft_id = int(callback.data.split(":", 1)[1])
+        except (ValueError, IndexError):
+            await callback.answer("Битый callback")
+            return
+        draft = await db.get_draft(draft_id)
+        if draft:
+            # Чистим скриншот, если он локальный
+            if draft.get("image_url"):
+                ref = draft["image_url"]
+                if not (ref.startswith("http://") or ref.startswith("https://")):
+                    render_post.cleanup_screenshot(ref)
+            await db.delete_draft(draft_id)
+        # Если юзер в ожидании правки этого черновика — сбросить
+        if callback.from_user:
+            pending = await db.get_pending_edit(callback.from_user.id)
+            if pending == draft_id:
+                await db.clear_pending_edit(callback.from_user.id)
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except TelegramAPIError:
+            pass
+        await callback.answer("Отменено")
+        await bot.send_message(callback.from_user.id, "❌ Черновик отменён.")
+
+    @dp.callback_query(F.data.startswith("orig:"))
+    async def cb_toggle_original(callback: CallbackQuery) -> None:
+        if cfg.admin_user_id and (not callback.from_user or callback.from_user.id != cfg.admin_user_id):
+            await callback.answer("⛔ Только для админа", show_alert=True)
+            return
+        try:
+            draft_id = int(callback.data.split(":", 1)[1])
+        except (ValueError, IndexError):
+            await callback.answer("Битый callback")
+            return
+        draft = await db.get_draft(draft_id)
+        if not draft:
+            await callback.answer("Черновик не найден", show_alert=True)
+            return
+        new_value = not draft.get("include_original", False)
+        await db.set_draft_include_original(draft_id, new_value)
+
+        # Перестроим текст и клавиатуру (auto-override эмодзи учтётся)
+        draft["include_original"] = new_value
+        new_text = _format_draft_text(draft)
+        new_kb = _draft_kb(draft_id, include_original=new_value)
+        edited = False
+        try:
+            # У сообщений с фото/видео меняем caption, у текстовых — text
+            if callback.message.photo or callback.message.video or callback.message.animation:
+                await callback.message.edit_caption(caption=new_text, reply_markup=new_kb)
+            else:
+                await callback.message.edit_text(
+                    text=new_text, reply_markup=new_kb, disable_web_page_preview=True,
+                )
+            edited = True
+        except TelegramAPIError as e:
+            log.warning("orig toggle: edit failed, fallback to resend: %s", e)
+        await callback.answer("Добавлено" if new_value else "Убрано")
+        if not edited:
+            await _send_preview(callback.from_user.id, draft_id)
+
+    # Хендлер для текста-инструкции на правку. Должен сработать ПЕРЕД дефолтными
+    # обработчиками, но ПОСЛЕ команд и хендлеров ссылок (которые матчатся regexp-ом).
+    @dp.message(F.text & ~F.text.startswith("/"))
+    async def edit_feedback_handler(message: Message) -> None:
+        if not _is_admin(message):
+            return
+        uid = message.from_user.id if message.from_user else 0
+        draft_id = await db.get_pending_edit(uid)
+        if draft_id is None:
+            return
+        # Если сообщение само содержит t.me/x/reddit ссылку — пусть его обработают
+        # другие хендлеры (этот вызывается после).
+        text = (message.text or "").strip()
+        if external_fetch.EXTERNAL_RE.search(text) or LINK_RE.search(text):
+            return
+        draft = await db.get_draft(draft_id)
+        if not draft:
+            await db.clear_pending_edit(uid)
+            await message.answer("Черновик не найден.")
+            return
+        # Сразу очищаем pending, чтобы повторное сообщение не ушло на повторную правку.
+        # Если Gemini упадёт — восстановим.
+        await db.clear_pending_edit(uid)
+        await message.answer("Применяю правку…")
+        src_url = draft.get("source_url") or ""
+        if src_url.startswith("https://github.com") or src_url.startswith("http://github.com"):
+            rewrite = await ai.summarize_github(
+                api_key=cfg.gemini_api_key,
+                model=cfg.gemini_model,
+                source_text=draft["original_text"],
+                edit_instruction=text,
+            )
+        else:
+            rewrite = await ai.translate_and_format(
+                api_key=cfg.gemini_api_key,
+                model=cfg.gemini_model,
+                source_text=draft["original_text"],
+                edit_instruction=text,
+            )
+        if not rewrite:
+            await db.set_pending_edit(uid, draft_id)  # вернуть состояние
+            await message.answer("Gemini не справился. Попробуйте описать правку иначе.")
+            return
+        await db.update_draft(draft_id, rewrite.title, rewrite.body, rewrite.hashtag)
+        await _send_preview(message.chat.id, draft_id)
+
+    @dp.message(Command("cancel"))
+    async def cmd_cancel(message: Message) -> None:
+        if not _is_admin(message):
+            return
+        uid = message.from_user.id if message.from_user else 0
+        pending = await db.get_pending_edit(uid)
+        if pending is not None:
+            await db.clear_pending_edit(uid)
+            await message.answer("Правка отменена.")
+        else:
+            await message.answer("Нечего отменять.")
+
+    @dp.message(Command("emojiid"))
+    async def cmd_emoji_id(message: Message) -> None:
+        if not _is_admin(message):
+            return
+        target = message.reply_to_message or message
+        entities = list(target.entities or []) + list(target.caption_entities or [])
+        ids: list[str] = []
+        for ent in entities:
+            if ent.type == MessageEntityType.CUSTOM_EMOJI and ent.custom_emoji_id:
+                ids.append(ent.custom_emoji_id)
+        if not ids:
+            await message.answer(
+                "В сообщении нет премиум-эмодзи.\n\n"
+                "Как использовать:\n"
+                "1. Перешлите сюда сообщение с премиум-эмодзи (нужен Telegram Premium у отправителя)\n"
+                "2. Ответьте на пересланное /emojiid\n"
+                "Или пришлите /emojiid с премиум-эмодзи в тексте."
+            )
+            return
+        unique_ids = list(dict.fromkeys(ids))
+        lines = ["Найдено premium emoji:"]
+        for i, eid in enumerate(unique_ids, 1):
+            lines.append(f"{i}. <code>{eid}</code>")
+        lines.append(
+            "\nЧтобы использовать: впишите ID в файл "
+            "<code>data/emojis.json</code> в поле \"id\" нужной темы."
+        )
+        await message.answer("\n".join(lines))
+
+    # /add с автоподпиской
+    @dp.message(Command("add"))
+    async def cmd_add_with_join(message: Message) -> None:
+        if not _is_admin(message):
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) < 2:
+            await message.answer("Использование: <code>/add @channel</code>")
+            return
+        added = await db.add_source(parts[1])
+        if not added:
+            await message.answer("Уже есть в списке или некорректный ввод.")
+            return
+        joined = await tg_reader.ensure_joined(tele_client, parts[1])
+        if joined:
+            await message.answer(f"Добавлен и подписан: <code>{parts[1]}</code>")
+        else:
+            await message.answer(
+                f"Добавлен: <code>{parts[1]}</code>\n"
+                f"⚠️ Не удалось подписаться — real-time не будет работать. "
+                f"Backup-поллинг каждые {cfg.interval_minutes} мин подхватит."
+            )
+
+    async def _scheduled_run():
+        await pipeline.run_once(tele_client, bot, cfg, on_result=_notify_admin)
+
+    async def _scheduled_cleanup():
+        """Раз в сутки: чистим старые драфты, seen-messages, runs, orphan-скриншоты."""
+        try:
+            stats = await db.cleanup_old_data()
+            if any(stats.values()):
+                log.info(
+                    "DB cleanup: drafts=%d seen=%d runs=%d published=%d",
+                    stats["drafts"], stats["seen"], stats["runs"], stats["published"],
+                )
+            # Orphan-скриншоты: файлы для которых нет драфта
+            import re as _re
+            sdir = render_post.screenshot_dir()
+            existing_ids: set[int] = set()
+            for fn in os.listdir(sdir):
+                m = _re.match(r"draft_(\d+)\.png$", fn)
+                if not m:
+                    continue
+                did = int(m.group(1))
+                if await db.get_draft(did) is None:
+                    render_post.cleanup_screenshot(str(sdir / fn))
+        except Exception:
+            log.exception("cleanup failed")
+
+    # Планировщик как safety-net
+    scheduler = AsyncIOScheduler(timezone="UTC")
+    if cfg.interval_minutes > 0:
+        scheduler.add_job(
+            _scheduled_run,
+            trigger="interval",
+            minutes=cfg.interval_minutes,
+            id="news_pipeline",
+            max_instances=1,
+            coalesce=True,
+        )
+        scheduler.add_job(
+            _scheduled_cleanup,
+            trigger="interval",
+            hours=24,
+            id="db_cleanup",
+            max_instances=1,
+            coalesce=True,
+        )
+
+        # Еженедельный дайджест: воскресенье 18:00 UTC
+        async def _scheduled_digest():
+            try:
+                result = await digest_mod.build_and_publish(bot, cfg)
+                log.info("Weekly digest: %s", result)
+                # Уведомить админа
+                if cfg.admin_user_id:
+                    msg = (
+                        f"📅 Дайджест опубликован. Пунктов: {result.get('posts_count', 0)}"
+                        if result.get("published")
+                        else f"⚠️ Дайджест не вышел: {result.get('reason')}"
+                    )
+                    try:
+                        await bot.send_message(cfg.admin_user_id, msg)
+                    except Exception:
+                        log.warning("digest admin notify failed", exc_info=True)
+            except Exception:
+                log.exception("scheduled digest failed")
+
+        scheduler.add_job(
+            _scheduled_digest,
+            trigger="cron",
+            day_of_week="sun",
+            hour=18,
+            minute=0,
+            id="weekly_digest",
+            max_instances=1,
+            coalesce=True,
+        )
+
+        scheduler.start()
+        log.info(
+            "Safety-net поллинг каждые %d мин, cleanup раз в сутки, "
+            "дайджест по воскресеньям 18:00 UTC",
+            cfg.interval_minutes,
+        )
+
+    # Catch-up на старте — за пропущенные посты пока бот лежал
+    asyncio.create_task(_scheduled_run())
+    # Orphan-скриншоты, оставшиеся после прошлого падения процесса
+    asyncio.create_task(_scheduled_cleanup())
+
+    try:
+        await dp.start_polling(bot, handle_signals=True)
+    finally:
+        if scheduler.running:
+            scheduler.shutdown(wait=False)
+        # Закрываем всё, что держит ресурсы/сокеты
+        try:
+            await tele_client.disconnect()
+        except Exception:
+            log.warning("Telethon disconnect raised", exc_info=True)
+        try:
+            await bot.session.close()
+        except Exception:
+            log.warning("aiogram bot.session.close raised", exc_info=True)
+        try:
+            await external_fetch.close_http()
+        except Exception:
+            log.warning("close_http raised", exc_info=True)
+        try:
+            await db.close()
+        except Exception:
+            log.warning("db.close raised", exc_info=True)
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

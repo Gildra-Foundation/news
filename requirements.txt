@@ -1,0 +1,7 @@
+aiogram>=3.4,<4
+telethon>=1.36
+google-genai>=0.8
+apscheduler>=3.10
+python-dotenv>=1.0
+aiosqlite>=0.19
+Pillow>=10.0

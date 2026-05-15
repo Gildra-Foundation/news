@@ -1,0 +1,20 @@
+services:
+  newsbot:
+    build: .
+    image: newsbot:latest
+    container_name: newsbot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    stop_grace_period: 15s
+    init: true
+    # Жёсткий потолок чтобы при сбое/утечке не съел всю машину
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
