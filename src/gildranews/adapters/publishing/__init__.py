@@ -1,0 +1,1 @@
+"""News publishing adapters."""

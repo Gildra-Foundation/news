@@ -1,7 +1,7 @@
 """Однократная авторизация Telethon-сессии.
 
 Запустить РОВНО ОДИН РАЗ перед первым стартом бота:
-    python init_session.py
+    python -m gildranews.init_session
 
 Понадобится номер телефона и код из Telegram.
 Создаст файл userbot.session — после этого main.py запустится без интерактива.
@@ -13,8 +13,8 @@ import os
 
 from telethon import TelegramClient
 
-from config import load
-from tg_reader import SESSION_NAME
+from gildranews.adapters.sources.telegram import SESSION_NAME
+from gildranews.config import load
 
 
 async def main() -> None:

@@ -1,0 +1,1 @@
+"""Emoji catalog adapter."""

@@ -5,9 +5,11 @@ Reddit — через нативный .json эндпойнт.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 import httpx
@@ -96,8 +98,7 @@ async def download_avatar(url: str, dest_path: str) -> bool:
     if r.status_code != 200 or not r.content:
         return False
     try:
-        with open(dest_path, "wb") as f:
-            f.write(r.content)
+        await asyncio.to_thread(Path(dest_path).write_bytes, r.content)
         return True
     except OSError:
         return False
@@ -125,7 +126,7 @@ async def _fetch_tweet(tweet_id: str) -> ExternalPost | None:
         return None
     try:
         data = r.json()
-    except Exception:
+    except ValueError:
         return None
 
     tweet = data.get("tweet") or {}
@@ -205,7 +206,7 @@ async def _fetch_reddit(subreddit: str, post_id: str) -> ExternalPost | None:
         return None
     try:
         data = r.json()
-    except Exception:
+    except ValueError:
         return None
     try:
         post = data[0]["data"]["children"][0]["data"]

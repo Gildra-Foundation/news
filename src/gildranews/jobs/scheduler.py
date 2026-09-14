@@ -1,0 +1,143 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+from collections.abc import Awaitable, Callable
+from pathlib import Path
+
+from aiogram import Bot
+from aiogram.exceptions import TelegramAPIError
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from telethon import TelegramClient
+
+from gildranews.adapters.persistence import sqlite as db
+from gildranews.adapters.rendering import cards
+from gildranews.application import digest, process_news
+from gildranews.config import Config
+from gildranews.domain.models import ProcessResult
+
+log = logging.getLogger(__name__)
+
+ResultCallback = Callable[[ProcessResult], Awaitable[None]]
+SCREENSHOT_PATTERN = re.compile(r"draft_(\d+)\.png$")
+
+
+def find_orphan_screenshots(directory: Path, active_draft_ids: set[int]) -> list[Path]:
+    orphans: list[Path] = []
+    for path in directory.iterdir():
+        match = SCREENSHOT_PATTERN.fullmatch(path.name)
+        if match and int(match.group(1)) not in active_draft_ids:
+            orphans.append(path)
+    return sorted(orphans)
+
+
+class ScheduledJobs:
+    def __init__(
+        self,
+        client: TelegramClient,
+        bot: Bot,
+        cfg: Config,
+        on_result: ResultCallback,
+    ) -> None:
+        self._client = client
+        self._bot = bot
+        self._cfg = cfg
+        self._on_result = on_result
+        self._scheduler = AsyncIOScheduler(timezone="UTC")
+        self._startup_tasks: set[asyncio.Task] = set()
+
+    async def run_pipeline(self) -> None:
+        await process_news.run_once(
+            self._client,
+            self._bot,
+            self._cfg,
+            on_result=self._on_result,
+        )
+
+    async def cleanup(self) -> None:
+        try:
+            stats = await db.cleanup_old_data()
+            if any(stats.values()):
+                log.info(
+                    "DB cleanup: drafts=%d seen=%d runs=%d published=%d",
+                    stats["drafts"],
+                    stats["seen"],
+                    stats["runs"],
+                    stats["published"],
+                )
+
+            active_draft_ids = set(await db.list_draft_ids())
+            for path in find_orphan_screenshots(cards.screenshot_dir(), active_draft_ids):
+                cards.cleanup_screenshot(str(path))
+        except Exception:
+            log.exception("cleanup failed")
+
+    async def publish_digest(self) -> None:
+        try:
+            result = await digest.build_and_publish(self._bot, self._cfg)
+            log.info("Weekly digest: %s", result)
+            if not self._cfg.admin_user_id:
+                return
+            message = (
+                f"📅 Дайджест опубликован. Пунктов: {result.get('posts_count', 0)}"
+                if result.get("published")
+                else f"⚠️ Дайджест не вышел: {result.get('reason')}"
+            )
+            try:
+                await self._bot.send_message(self._cfg.admin_user_id, message)
+            except TelegramAPIError:
+                log.warning("digest admin notify failed", exc_info=True)
+        except Exception:
+            log.exception("scheduled digest failed")
+
+    def start(self) -> None:
+        if self._cfg.interval_minutes > 0:
+            self._scheduler.add_job(
+                self.run_pipeline,
+                trigger="interval",
+                minutes=self._cfg.interval_minutes,
+                id="news_pipeline",
+                max_instances=1,
+                coalesce=True,
+            )
+            self._scheduler.add_job(
+                self.cleanup,
+                trigger="interval",
+                hours=24,
+                id="db_cleanup",
+                max_instances=1,
+                coalesce=True,
+            )
+            self._scheduler.add_job(
+                self.publish_digest,
+                trigger="cron",
+                day_of_week="sun",
+                hour=18,
+                minute=0,
+                id="weekly_digest",
+                max_instances=1,
+                coalesce=True,
+            )
+            self._scheduler.start()
+            log.info(
+                "Safety-net поллинг каждые %d мин, cleanup раз в сутки, "
+                "дайджест по воскресеньям 18:00 UTC",
+                self._cfg.interval_minutes,
+            )
+
+        self._start_task(self.run_pipeline())
+        self._start_task(self.cleanup())
+
+    def _start_task(self, coroutine) -> None:
+        task = asyncio.create_task(coroutine)
+        self._startup_tasks.add(task)
+        task.add_done_callback(self._startup_tasks.discard)
+
+    async def stop(self) -> None:
+        if self._scheduler.running:
+            self._scheduler.shutdown(wait=False)
+        for task in self._startup_tasks:
+            task.cancel()
+        if self._startup_tasks:
+            await asyncio.gather(*self._startup_tasks, return_exceptions=True)

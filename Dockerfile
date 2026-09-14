@@ -14,10 +14,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt ./
-RUN pip install -r requirements.txt
+COPY pyproject.toml README.md ./
+COPY src/ ./src/
+RUN pip install .
 
-COPY config.py db.py ai.py digest.py emoji_store.py external_fetch.py render_post.py tg_reader.py tg_writer.py pipeline.py main.py init_session.py ./
 COPY assets/ ./assets/
 
 RUN useradd --create-home --uid 1000 app && \
@@ -25,4 +25,4 @@ RUN useradd --create-home --uid 1000 app && \
     chown -R app:app /app
 USER app
 
-CMD ["python", "main.py"]
+CMD ["python", "-m", "gildranews"]

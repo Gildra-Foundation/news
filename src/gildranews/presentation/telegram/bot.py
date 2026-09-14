@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import os.path
 import re
 import tempfile
+from functools import partial
 
 from aiogram import F
 from aiogram.enums import MessageEntityType
@@ -13,27 +13,26 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
-    FSInputFile,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
     Message,
 )
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from telethon import events
 
-import external_fetch
-import render_post
+from gildranews.adapters.rendering import cards as render_post
+from gildranews.adapters.sources import external as external_fetch
 
 LINK_RE = re.compile(r"(?:https?://)?t\.me/(c/)?([\w_]+)/(\d+)", re.IGNORECASE)
 
-import ai
-import config
-import db
-import digest as digest_mod
-import emoji_store
-import pipeline
-import tg_reader
-import tg_writer
+from gildranews import config
+from gildranews.adapters.ai import gemini as ai
+from gildranews.adapters.emoji import catalog as emoji_store
+from gildranews.adapters.persistence import sqlite as db
+from gildranews.adapters.publishing import telegram as tg_writer
+from gildranews.adapters.sources import telegram as tg_reader
+from gildranews.application import digest as digest_mod
+from gildranews.application import process_news as pipeline
+from gildranews.jobs.scheduler import ScheduledJobs
+from gildranews.presentation.telegram import drafts
+from gildranews.presentation.telegram.notifications import format_status, notify_admin
+from gildranews.presentation.telegram.realtime import register_realtime_handler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -69,44 +68,7 @@ INITIAL_SOURCES = [
     "NeuralShit",
     "gptpublic",
 ]
-ALBUM_DEBOUNCE_SECONDS = 2.5
-
-STATUS_EMOJI = {
-    "published": "✅",
-    "filtered": "🚫",
-    "already_published": "🔁",
-    "publish_failed": "⚠️",
-    "ai_error": "⚠️",
-    "error": "⚠️",
-}
-
-STATUS_LABEL = {
-    "published": "Опубликовано",
-    "filtered": "Отклонено",
-    "already_published": "Уже публиковали",
-    "publish_failed": "Ошибка публикации",
-    "ai_error": "Ошибка Gemini",
-    "error": "Ошибка обработки",
-}
-
-
-def _html_escape(s: str) -> str:
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def _format_admin_notice(result) -> str:
-    emoji = STATUS_EMOJI.get(result.status, "•")
-    label = STATUS_LABEL.get(result.status, result.status)
-    link = f"https://t.me/{result.channel}/{result.message_id}"
-    lines = [f"{emoji} <b>{label}</b>", f'<a href="{link}">@{result.channel}/{result.message_id}</a>']
-    if result.title:
-        lines.append(f"\n📌 {_html_escape(result.title)}")
-    if result.reason:
-        lines.append(f"\n💭 {_html_escape(result.reason)}")
-    return "\n".join(lines)
-
-
-async def main() -> None:
+async def run_bot() -> None:
     cfg = config.load()
     os.makedirs("data", exist_ok=True)
     await db.init()
@@ -115,7 +77,8 @@ async def main() -> None:
     if not os.path.exists(f"{tg_reader.SESSION_NAME}.session"):
         log.error(
             "Не найден файл сессии Telethon (%s.session). "
-            "Запустите сначала: docker compose run --rm newsbot python init_session.py",
+            "Запустите сначала: docker compose run --rm newsbot "
+            "python -m gildranews.init_session",
             tg_reader.SESSION_NAME,
         )
         return
@@ -133,64 +96,8 @@ async def main() -> None:
     for src in sources:
         await tg_reader.ensure_joined(tele_client, src)
 
-    # ------- Real-time обработчик -------
-    album_buffers: dict[int, list] = {}
-
-    async def _notify_admin(result) -> None:
-        if cfg.admin_user_id == 0 or result.status == "duplicate":
-            return
-        try:
-            await bot.send_message(
-                chat_id=cfg.admin_user_id,
-                text=_format_admin_notice(result),
-                disable_web_page_preview=True,
-            )
-        except Exception as e:
-            log.warning("Не удалось отправить уведомление админу: %s", e)
-
-    async def _process_messages(channel: str, msgs: list) -> None:
-        post = tg_reader.build_post_from_messages(channel, msgs)
-        if not post:
-            return
-        try:
-            result = await pipeline.process_post(tele_client, bot, cfg, post)
-            log.info("real-time @%s/%s -> %s", post.channel, post.message_id, result.status)
-            await _notify_admin(result)
-        except Exception:
-            log.exception("Ошибка real-time обработки @%s/%s", post.channel, post.message_id)
-
-    async def _flush_album(grouped_id: int, channel: str) -> None:
-        await asyncio.sleep(ALBUM_DEBOUNCE_SECONDS)
-        msgs = album_buffers.pop(grouped_id, [])
-        if msgs:
-            await _process_messages(channel, msgs)
-
-    @tele_client.on(events.NewMessage(incoming=True))
-    async def realtime_handler(event):
-        try:
-            chat = await event.get_chat()
-            username = (getattr(chat, "username", None) or "").lower()
-            if not username:
-                return
-            current = set(await db.list_sources())
-            if username not in current:
-                return
-
-            msg = event.message
-            if not msg:
-                return
-
-            if msg.grouped_id:
-                first_in_group = msg.grouped_id not in album_buffers
-                album_buffers.setdefault(msg.grouped_id, []).append(msg)
-                if first_in_group:
-                    asyncio.create_task(_flush_album(msg.grouped_id, username))
-            else:
-                await _process_messages(username, [msg])
-        except Exception:
-            log.exception("Ошибка в realtime_handler")
-
-    log.info("Real-time обработчик зарегистрирован")
+    _notify_admin = partial(notify_admin, bot, cfg)
+    register_realtime_handler(tele_client, bot, cfg, _notify_admin)
 
     # ------- Команды бота -------
     def _is_admin(message: Message) -> bool:
@@ -337,89 +244,12 @@ async def main() -> None:
             return
 
         # Краткий ответ на исходное сообщение + полное уведомление
-        emoji = STATUS_EMOJI.get(result.status, "•")
-        label = STATUS_LABEL.get(result.status, result.status)
-        await message.answer(f"{emoji} {label}")
+        await message.answer(format_status(result))
         await _notify_admin(result)
 
     # ------- X / Reddit / GitHub: парсинг ссылки, превью с кнопками -------
     # Состояние ожидания инструкции на правку хранится в db.pending_edits —
     # выживает при рестарте, чистится `_scheduled_cleanup`.
-
-    def _draft_kb(draft_id: int, include_original: bool = False) -> InlineKeyboardMarkup:
-        orig_label = "✓ Оригинал в посте" if include_original else "🔗 Оригинал в посте"
-        return InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"edit:{draft_id}"),
-                InlineKeyboardButton(text="✅ Опубликовать", callback_data=f"pub:{draft_id}"),
-            ],
-            [
-                InlineKeyboardButton(text=orig_label, callback_data=f"orig:{draft_id}"),
-                InlineKeyboardButton(text="❌ Отменить", callback_data=f"cancel:{draft_id}"),
-            ],
-        ])
-
-    def _photo_arg(image_ref: str | None):
-        """URL → строка, локальный путь → FSInputFile. None — нет фото."""
-        if not image_ref:
-            return None
-        if image_ref.startswith("http://") or image_ref.startswith("https://"):
-            return image_ref
-        if os.path.isfile(image_ref):
-            return FSInputFile(image_ref)
-        return None
-
-    def _draft_tail_url(draft: dict) -> str | None:
-        """Для GitHub-черновиков всегда добавляем ссылку на репо в конце."""
-        src = draft.get("source_url") or ""
-        if src.startswith("https://github.com") or src.startswith("http://github.com"):
-            return src
-        return None
-
-    def _format_draft_text(draft: dict) -> str:
-        """Сборка текста поста с premium-эмодзи (auto-override по компаниям/языкам)."""
-        original_url = draft["source_url"] if draft.get("include_original") else None
-        emap = emoji_store.load()
-        override = emoji_store.detect_override(
-            emap, f"{draft.get('title','')}\n{draft.get('body','')}",
-        )
-        return tg_writer.format_post(
-            draft["title"], draft["body"],
-            emoji_theme=override or "",
-            emoji_map=emap,
-            original_url=original_url,
-            tail_url=_draft_tail_url(draft),
-            hashtag_key=draft.get("hashtag") or "",
-        )
-
-    async def _send_preview(chat_id: int, draft_id: int) -> None:
-        draft = await db.get_draft(draft_id)
-        if not draft:
-            await bot.send_message(chat_id, "Черновик не найден.")
-            return
-        text = _format_draft_text(draft)
-        kb = _draft_kb(draft_id, include_original=draft.get("include_original", False))
-        media = _photo_arg(draft["image_url"])
-        media_type = draft.get("media_type") or "photo"
-        sent = False
-        if media:
-            try:
-                if media_type == "video":
-                    await bot.send_video(
-                        chat_id=chat_id, video=media, caption=text, reply_markup=kb,
-                    )
-                else:
-                    await bot.send_photo(
-                        chat_id=chat_id, photo=media, caption=text, reply_markup=kb,
-                    )
-                sent = True
-            except TelegramAPIError as e:
-                log.warning("Не удалось отправить превью с медиа: %s — fallback text", e)
-        if not sent:
-            await bot.send_message(
-                chat_id=chat_id, text=text, reply_markup=kb,
-                disable_web_page_preview=True,
-            )
 
     @dp.message(F.text.regexp(external_fetch.EXTERNAL_RE))
     async def cmd_external_url(message: Message) -> None:
@@ -527,7 +357,7 @@ async def main() -> None:
                 screenshot_path = None
             if screenshot_path:
                 await db.set_draft_image(draft_id, screenshot_path)
-        await _send_preview(message.chat.id, draft_id)
+        await drafts.send_preview(bot, message.chat.id, draft_id)
 
     @dp.callback_query(F.data.startswith("pub:"))
     async def cb_publish(callback: CallbackQuery) -> None:
@@ -544,8 +374,8 @@ async def main() -> None:
             await callback.answer("Черновик не найден или уже опубликован", show_alert=True)
             return
 
-        text = _format_draft_text(draft)
-        media = _photo_arg(draft["image_url"])
+        text = drafts.format_draft_text(draft)
+        media = drafts.photo_argument(draft["image_url"])
         media_type = draft.get("media_type") or "photo"
         target_msg_id: int | None = None
         try:
@@ -580,7 +410,7 @@ async def main() -> None:
         # Удаляем черновик и временный скриншот (если был локальный файл)
         if draft.get("image_url"):
             ref = draft["image_url"]
-            if not (ref.startswith("http://") or ref.startswith("https://")):
+            if not ref.startswith(("http://", "https://")):
                 render_post.cleanup_screenshot(ref)
         await db.delete_draft(draft_id)
         # Убрать кнопки на превью
@@ -633,7 +463,7 @@ async def main() -> None:
             # Чистим скриншот, если он локальный
             if draft.get("image_url"):
                 ref = draft["image_url"]
-                if not (ref.startswith("http://") or ref.startswith("https://")):
+                if not ref.startswith(("http://", "https://")):
                     render_post.cleanup_screenshot(ref)
             await db.delete_draft(draft_id)
         # Если юзер в ожидании правки этого черновика — сбросить
@@ -667,8 +497,8 @@ async def main() -> None:
 
         # Перестроим текст и клавиатуру (auto-override эмодзи учтётся)
         draft["include_original"] = new_value
-        new_text = _format_draft_text(draft)
-        new_kb = _draft_kb(draft_id, include_original=new_value)
+        new_text = drafts.format_draft_text(draft)
+        new_kb = drafts.draft_keyboard(draft_id, include_original=new_value)
         edited = False
         try:
             # У сообщений с фото/видео меняем caption, у текстовых — text
@@ -683,7 +513,7 @@ async def main() -> None:
             log.warning("orig toggle: edit failed, fallback to resend: %s", e)
         await callback.answer("Добавлено" if new_value else "Убрано")
         if not edited:
-            await _send_preview(callback.from_user.id, draft_id)
+            await drafts.send_preview(bot, callback.from_user.id, draft_id)
 
     # Хендлер для текста-инструкции на правку. Должен сработать ПЕРЕД дефолтными
     # обработчиками, но ПОСЛЕ команд и хендлеров ссылок (которые матчатся regexp-ом).
@@ -710,7 +540,7 @@ async def main() -> None:
         await db.clear_pending_edit(uid)
         await message.answer("Применяю правку…")
         src_url = draft.get("source_url") or ""
-        if src_url.startswith("https://github.com") or src_url.startswith("http://github.com"):
+        if src_url.startswith(("https://github.com", "http://github.com")):
             rewrite = await ai.summarize_github(
                 api_key=cfg.gemini_api_key,
                 model=cfg.gemini_model,
@@ -729,7 +559,7 @@ async def main() -> None:
             await message.answer("Gemini не справился. Попробуйте описать правку иначе.")
             return
         await db.update_draft(draft_id, rewrite.title, rewrite.body, rewrite.hashtag)
-        await _send_preview(message.chat.id, draft_id)
+        await drafts.send_preview(bot, message.chat.id, draft_id)
 
     @dp.message(Command("cancel"))
     async def cmd_cancel(message: Message) -> None:
@@ -795,99 +625,13 @@ async def main() -> None:
                 f"Backup-поллинг каждые {cfg.interval_minutes} мин подхватит."
             )
 
-    async def _scheduled_run():
-        await pipeline.run_once(tele_client, bot, cfg, on_result=_notify_admin)
-
-    async def _scheduled_cleanup():
-        """Раз в сутки: чистим старые драфты, seen-messages, runs, orphan-скриншоты."""
-        try:
-            stats = await db.cleanup_old_data()
-            if any(stats.values()):
-                log.info(
-                    "DB cleanup: drafts=%d seen=%d runs=%d published=%d",
-                    stats["drafts"], stats["seen"], stats["runs"], stats["published"],
-                )
-            # Orphan-скриншоты: файлы для которых нет драфта
-            import re as _re
-            sdir = render_post.screenshot_dir()
-            existing_ids: set[int] = set()
-            for fn in os.listdir(sdir):
-                m = _re.match(r"draft_(\d+)\.png$", fn)
-                if not m:
-                    continue
-                did = int(m.group(1))
-                if await db.get_draft(did) is None:
-                    render_post.cleanup_screenshot(str(sdir / fn))
-        except Exception:
-            log.exception("cleanup failed")
-
-    # Планировщик как safety-net
-    scheduler = AsyncIOScheduler(timezone="UTC")
-    if cfg.interval_minutes > 0:
-        scheduler.add_job(
-            _scheduled_run,
-            trigger="interval",
-            minutes=cfg.interval_minutes,
-            id="news_pipeline",
-            max_instances=1,
-            coalesce=True,
-        )
-        scheduler.add_job(
-            _scheduled_cleanup,
-            trigger="interval",
-            hours=24,
-            id="db_cleanup",
-            max_instances=1,
-            coalesce=True,
-        )
-
-        # Еженедельный дайджест: воскресенье 18:00 UTC
-        async def _scheduled_digest():
-            try:
-                result = await digest_mod.build_and_publish(bot, cfg)
-                log.info("Weekly digest: %s", result)
-                # Уведомить админа
-                if cfg.admin_user_id:
-                    msg = (
-                        f"📅 Дайджест опубликован. Пунктов: {result.get('posts_count', 0)}"
-                        if result.get("published")
-                        else f"⚠️ Дайджест не вышел: {result.get('reason')}"
-                    )
-                    try:
-                        await bot.send_message(cfg.admin_user_id, msg)
-                    except Exception:
-                        log.warning("digest admin notify failed", exc_info=True)
-            except Exception:
-                log.exception("scheduled digest failed")
-
-        scheduler.add_job(
-            _scheduled_digest,
-            trigger="cron",
-            day_of_week="sun",
-            hour=18,
-            minute=0,
-            id="weekly_digest",
-            max_instances=1,
-            coalesce=True,
-        )
-
-        scheduler.start()
-        log.info(
-            "Safety-net поллинг каждые %d мин, cleanup раз в сутки, "
-            "дайджест по воскресеньям 18:00 UTC",
-            cfg.interval_minutes,
-        )
-
-    # Catch-up на старте — за пропущенные посты пока бот лежал
-    asyncio.create_task(_scheduled_run())
-    # Orphan-скриншоты, оставшиеся после прошлого падения процесса
-    asyncio.create_task(_scheduled_cleanup())
+    jobs = ScheduledJobs(tele_client, bot, cfg, _notify_admin)
+    jobs.start()
 
     try:
         await dp.start_polling(bot, handle_signals=True)
     finally:
-        if scheduler.running:
-            scheduler.shutdown(wait=False)
+        await jobs.stop()
         # Закрываем всё, что держит ресурсы/сокеты
         try:
             await tele_client.disconnect()
@@ -905,10 +649,3 @@ async def main() -> None:
             await db.close()
         except Exception:
             log.warning("db.close raised", exc_info=True)
-
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass

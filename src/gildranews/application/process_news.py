@@ -3,26 +3,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import tempfile
-from dataclasses import dataclass
 
 from aiogram import Bot
 from telethon import TelegramClient
 
-import ai
-import db
-import emoji_store
-import tg_reader
-import tg_writer
-from config import Config
-
-
-@dataclass
-class ProcessResult:
-    status: str  # 'duplicate' | 'filtered' | 'published' | 'publish_failed' | 'ai_error' | 'error'
-    channel: str
-    message_id: int
-    reason: str = ""
-    title: str = ""
+from gildranews.adapters.ai import gemini as ai
+from gildranews.adapters.emoji import catalog as emoji_store
+from gildranews.adapters.persistence import sqlite as db
+from gildranews.adapters.publishing import telegram as tg_writer
+from gildranews.adapters.sources import telegram as tg_reader
+from gildranews.application.ports import NewsFilter
+from gildranews.config import Config
+from gildranews.domain.models import ProcessResult
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +24,7 @@ async def run_once(
     bot: Bot,
     cfg: Config,
     on_result=None,
+    news_filter: NewsFilter | None = None,
 ) -> dict:
     """Backup-поллинг. Вызывает on_result(ProcessResult) для каждого обработанного поста.
     Используется и как safety-net каждые INTERVAL_MINUTES, и для catch-up на старте.
@@ -59,7 +52,13 @@ async def run_once(
             log.info("Поллинг: %d новых постов из %d источников", fetched, len(sources))
 
         for post in posts:
-            result = await process_post(client, bot, cfg, post)
+            result = await process_post(
+                client,
+                bot,
+                cfg,
+                post,
+                news_filter=news_filter,
+            )
             if result.status == "published":
                 published += 1
                 selected_count += 1
@@ -74,7 +73,7 @@ async def run_once(
                 await asyncio.sleep(2)  # rate limit на публикацию
 
     except Exception as e:
-        log.exception("Ошибка в прогоне: %s", e)
+        log.exception("Ошибка в прогоне")
         error = f"{type(e).__name__}: {e}"
 
     await db.record_run(fetched, selected_count, published, error)
@@ -88,6 +87,7 @@ async def process_post(
     post: tg_reader.FetchedPost,
     *,
     force: bool = False,
+    news_filter: NewsFilter | None = None,
 ) -> ProcessResult:
     """Real-time обработка одного поста. Возвращает ProcessResult с статусом и причиной.
     force=True — для ручной отправки админом по ссылке: пропускаем claim,
@@ -108,9 +108,11 @@ async def process_post(
     emoji_themes = emoji_store.themes_for_prompt(emoji_map)
 
     try:
-        filt = await ai.filter_and_rewrite(
+        processor = news_filter or ai.GeminiNewsFilter(
             api_key=cfg.gemini_api_key,
             model=cfg.gemini_model,
+        )
+        filt = await processor.filter_and_rewrite(
             text=post.text,
             recent_titles=recent_titles,
             emoji_themes=emoji_themes,

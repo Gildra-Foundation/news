@@ -5,11 +5,11 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramAPIError, TelegramRetryAfter
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message, FSInputFile, InputMediaPhoto, InputMediaVideo
-from aiogram.exceptions import TelegramRetryAfter, TelegramAPIError
+from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo, Message
 
-import db
+from gildranews.adapters.persistence import sqlite as db
 
 log = logging.getLogger(__name__)
 
@@ -268,7 +268,7 @@ async def publish(
                 await _asyncio.sleep(wait)
                 continue
             return None
-        except TelegramAPIError as e:
-            log.exception("Не удалось опубликовать: %s", e)
+        except TelegramAPIError:
+            log.exception("Не удалось опубликовать")
             return None
     return None

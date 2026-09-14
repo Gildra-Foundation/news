@@ -9,11 +9,10 @@
 from __future__ import annotations
 
 import logging
-import math
 import os
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 
 log = logging.getLogger(__name__)
 
@@ -138,7 +137,7 @@ def _circular_avatar(path: str, size: int) -> Image.Image | None:
     """Круглая аватарка с прозрачным фоном."""
     try:
         src = Image.open(path).convert("RGBA")
-    except Exception:
+    except (OSError, ValueError, UnidentifiedImageError):
         return None
     # Crop centred square, resize, mask
     w, h = src.size
@@ -315,7 +314,7 @@ def render_tweet(
     brand_text = "𝕏"
     try:
         bw = draw.textlength(brand_text, font=brand_font)
-    except Exception:
+    except Exception:  # noqa: BLE001 - font backends expose inconsistent glyph errors
         brand_text = "X"
         bw = draw.textlength(brand_text, font=brand_font)
     if bw < 10:
@@ -439,7 +438,6 @@ def render_github(
     desc_font = _font(False, 32)
     topic_font = _font(True, 24)
     meta_font = _font(True, 30)
-    meta_label_font = _font(False, 24)
     brand_font = _font(True, 36)
 
     text_max_w = WIDTH - 2 * PADDING

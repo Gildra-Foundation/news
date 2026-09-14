@@ -2,21 +2,21 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 
 from telethon import TelegramClient
 from telethon.errors import (
     ChannelPrivateError,
+    FloodWaitError,
     UsernameInvalidError,
     UsernameNotOccupiedError,
-    FloodWaitError,
 )
 from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.types import (
     MessageEntityTextUrl,
-    MessageMediaPhoto,
     MessageMediaDocument,
+    MessageMediaPhoto,
 )
 
 log = logging.getLogger(__name__)
@@ -99,7 +99,7 @@ async def fetch_recent(
     lookback_minutes: int,
     seen_check,
 ) -> list[FetchedPost]:
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)
+    cutoff = datetime.now(UTC) - timedelta(minutes=lookback_minutes)
     out: list[FetchedPost] = []
 
     for username in channels:
@@ -139,8 +139,8 @@ async def fetch_recent(
             log.warning("FloodWait %ds на @%s — пропуск", e.seconds, username)
         except (ChannelPrivateError, UsernameInvalidError, UsernameNotOccupiedError) as e:
             log.warning("Канал @%s недоступен: %s", username, type(e).__name__)
-        except Exception as e:
-            log.exception("Ошибка чтения @%s: %s", username, e)
+        except Exception:
+            log.exception("Ошибка чтения @%s", username)
 
     out.sort(key=lambda p: p.date)
     return out
@@ -170,8 +170,8 @@ async def fetch_post_by_link(
     except (ChannelPrivateError, UsernameInvalidError, UsernameNotOccupiedError) as e:
         log.warning("Канал @%s недоступен по ссылке: %s", channel, type(e).__name__)
         return None
-    except Exception as e:
-        log.exception("Ошибка получения поста @%s/%s: %s", channel, message_id, e)
+    except Exception:
+        log.exception("Ошибка получения поста @%s/%s", channel, message_id)
         return None
 
 
@@ -200,8 +200,8 @@ async def fetch_latest_one(client: TelegramClient, channel: str) -> FetchedPost 
         return candidates[0] if candidates else None
     except (ChannelPrivateError, UsernameInvalidError, UsernameNotOccupiedError) as e:
         log.warning("Канал @%s недоступен: %s", channel, type(e).__name__)
-    except Exception as e:
-        log.exception("Ошибка чтения @%s: %s", channel, e)
+    except Exception:
+        log.exception("Ошибка чтения @%s", channel)
     return None
 
 
@@ -218,8 +218,8 @@ async def ensure_joined(client: TelegramClient, channel: str) -> bool:
     except (ChannelPrivateError, UsernameInvalidError, UsernameNotOccupiedError) as e:
         log.warning("Не удалось подписаться на @%s: %s", channel, type(e).__name__)
         return False
-    except Exception as e:
-        log.exception("Ошибка подписки на @%s: %s", channel, e)
+    except Exception:
+        log.exception("Ошибка подписки на @%s", channel)
         return False
 
 
@@ -246,7 +246,7 @@ async def download_post_media(
             path = await client.download_media(msg, file=dest_dir)
             if path:
                 out.append((path, kind))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - Telethon media errors vary by media type
             log.warning(
                 "Не удалось скачать медиа из @%s/%s: %s",
                 post.channel, msg.id, e,

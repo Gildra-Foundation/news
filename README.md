@@ -123,8 +123,8 @@ sequenceDiagram
 ### 1. Клонировать репо
 
 ```bash
-git clone https://github.com/Zulut30/newslatter-bot.git
-cd newslatter-bot
+git clone https://github.com/Gildra-Foundation/news.git
+cd news
 ```
 
 ### 2. Заполнить `.env`
@@ -147,7 +147,7 @@ cp .env.example .env
 ### 3. Авторизация Telethon (один раз)
 
 ```bash
-docker compose run --rm newsbot python init_session.py
+docker compose run --rm newsbot python -m gildranews.init_session
 ```
 
 Введите номер и SMS-код. Сессия запишется в `data/userbot.session`.
@@ -266,28 +266,40 @@ gantt
 
 ```
 .
-├── 🧠 ai.py                   # Gemini-промпты: filter, rewrite, translate, github, digest
-├── 💾 db.py                   # SQLite + WAL: sources, seen, drafts, published, pending_edits
-├── 🛰️ tg_reader.py            # Telethon userbot: fetch, auto-join, expand inline links
-├── ✉️ tg_writer.py            # aiogram: publish, format_post, retry on FloodWait
-├── 🌐 external_fetch.py       # FxTwitter / Reddit JSON / GitHub API
-├── 🎨 render_post.py          # Pillow: карточки X / Reddit / GitHub
-├── 📅 digest.py               # Еженедельный дайджест
-├── 🔄 pipeline.py             # Оркестрация: real-time + safety poll
-├── 😀 emoji_store.py          # 37 emoji + regex-override
-├── 🚀 main.py                 # Точка входа, scheduler, handlers
-├── ⚙️ config.py               # Загрузка .env через python-dotenv
-├── 🔐 init_session.py         # Одноразовая Telethon-авторизация
-├── 🐳 Dockerfile              # python:3.12-slim + fonts-dejavu
-├── 🐳 docker-compose.yml      # mem_limit 512m, cpus 1.0, restart unless-stopped
-├── 📋 requirements.txt        # 6 пакетов: aiogram, telethon, google-genai, apscheduler, aiosqlite, Pillow
-├── 🖼️ assets/
+├── src/gildranews/
+│   ├── domain/                # Общие модели без зависимостей от SDK
+│   ├── application/           # Pipeline, дайджест и контракты внешних компонентов
+│   ├── adapters/
+│   │   ├── ai/                # AI-провайдеры; сейчас Gemini, далее ChatGPT Server
+│   │   ├── sources/           # Telegram, X, Reddit и GitHub
+│   │   ├── publishing/        # Публикация через Telegram Bot API
+│   │   ├── persistence/       # SQLite
+│   │   ├── rendering/         # Карточки и инфографика Pillow
+│   │   └── emoji/             # Каталог и выбор emoji
+│   ├── presentation/telegram/ # Команды, callbacks, уведомления и real-time события
+│   ├── jobs/                  # Планировщик, cleanup и недельный дайджест
+│   ├── config.py              # Типизированная конфигурация окружения
+│   └── main.py                # Минимальная точка входа
+├── tests/                     # Unit и integration-тесты
+├── pyproject.toml             # Метаданные, зависимости и инструменты качества
+├── Dockerfile                 # python:3.12-slim + fonts-dejavu
+├── docker-compose.yml         # mem_limit 512m, cpus 1.0, restart unless-stopped
+├── assets/
 │   └── digest_cover.jpg       # Обложка для дайджеста
-└── 📂 data/                   # Создаётся при первом запуске
+└── data/                      # Создаётся при первом запуске, не хранится в Git
     ├── userbot.session        # Telethon-сессия
     ├── newsbot.db             # SQLite с WAL
     ├── emojis.json            # Карта 37 эмодзи (можно править на лету)
     └── screenshots/           # Временные карточки X/Reddit/GitHub
+```
+
+Локальная установка для разработки:
+
+```bash
+uv venv .venv --python 3.12
+uv pip install --python .venv/bin/python -e '.[dev]'
+.venv/bin/python -m pytest
+.venv/bin/ruff check src tests
 ```
 
 ---

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Iterable
+from collections.abc import Iterable
 
 import aiosqlite
 
@@ -93,10 +93,8 @@ async def close() -> None:
 
 def _normalize(username: str) -> str:
     u = username.strip().lstrip("@").lower()
-    if u.startswith("https://t.me/"):
-        u = u[len("https://t.me/"):]
-    if u.startswith("t.me/"):
-        u = u[len("t.me/"):]
+    u = u.removeprefix("https://t.me/")
+    u = u.removeprefix("t.me/")
     return u.split("/")[0]
 
 

@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from google import genai
 from google.genai import types
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
+
+from gildranews.domain.models import FilterResult, Rewrite
 
 log = logging.getLogger(__name__)
 
@@ -24,7 +27,7 @@ HASHTAG: для каждого поста ОБЯЗАТЕЛЬНО выбери О
 
 # Кэш Gemini-клиентов по api_key. Клиент держит внутренний httpx-пул,
 # создавать его на каждый вызов — потеря на TLS handshake/DNS.
-_gemini_clients: dict[str, "genai.Client"] = {}
+_gemini_clients: dict[str, genai.Client] = {}
 
 
 def _gemini(api_key: str):
@@ -33,6 +36,28 @@ def _gemini(api_key: str):
         cli = genai.Client(api_key=api_key)
         _gemini_clients[api_key] = cli
     return cli
+
+
+@dataclass(frozen=True, slots=True)
+class GeminiNewsFilter:
+    """Configured Gemini adapter for the application-level news filter port."""
+
+    api_key: str
+    model: str
+
+    async def filter_and_rewrite(
+        self,
+        text: str,
+        recent_titles: Sequence[str],
+        emoji_themes: Sequence[dict[str, str]],
+    ) -> FilterResult | None:
+        return await filter_and_rewrite(
+            api_key=self.api_key,
+            model=self.model,
+            text=text,
+            recent_titles=list(recent_titles),
+            emoji_themes=list(emoji_themes),
+        )
 
 REWRITE_PROMPT = """Ты — редактор Telegram-канала «RuNeuroNews» о новостях и находках в индустрии ИИ.
 
@@ -208,13 +233,6 @@ EMOJI_THEME: если в payload есть массив "available_emoji_themes" 
 """ + HASHTAG_INSTRUCTION
 
 
-@dataclass
-class Rewrite:
-    title: str
-    body: str
-    hashtag: str = ""
-
-
 # Pydantic-схемы для structured output Gemini
 class _RewriteOutput(BaseModel):
     title: str
@@ -223,16 +241,6 @@ class _RewriteOutput(BaseModel):
 
 
 class _FilterOutput(BaseModel):
-    is_news: bool
-    reason: str
-    title: str = ""
-    body: str = ""
-    emoji_theme: str = ""
-    hashtag: str = ""
-
-
-@dataclass
-class FilterResult:
     is_news: bool
     reason: str
     title: str = ""
@@ -299,8 +307,8 @@ async def filter_and_rewrite(
                 thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
-    except Exception as e:
-        log.exception("Gemini filter error: %s", e)
+    except Exception:
+        log.exception("Gemini filter error")
         return None
 
     parsed: _FilterOutput | None = getattr(resp, "parsed", None)
@@ -416,8 +424,8 @@ async def translate_and_format(
                 thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
-    except Exception as e:
-        log.exception("Gemini translate error: %s", e)
+    except Exception:
+        log.exception("Gemini translate error")
         return None
 
     parsed: _TranslateOutput | None = getattr(resp, "parsed", None)
@@ -510,8 +518,8 @@ async def summarize_github(
                 thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
-    except Exception as e:
-        log.exception("Gemini github summarize error: %s", e)
+    except Exception:
+        log.exception("Gemini github summarize error")
         return None
 
     parsed: _RewriteOutput | None = getattr(resp, "parsed", None)
@@ -600,8 +608,8 @@ async def make_weekly_digest(
                 thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
-    except Exception as e:
-        log.exception("Gemini digest error: %s", e)
+    except Exception:
+        log.exception("Gemini digest error")
         return None
 
     parsed: _DigestOutput | None = getattr(resp, "parsed", None)
@@ -613,7 +621,7 @@ async def make_weekly_digest(
         return None
     try:
         return _DigestOutput(**data)
-    except Exception:
+    except ValidationError:
         log.error("Gemini digest schema mismatch: %r", data)
         return None
 
@@ -634,8 +642,8 @@ async def rewrite_only(api_key: str, model: str, text: str) -> Rewrite | None:
                 thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
-    except Exception as e:
-        log.exception("Gemini rewrite error: %s", e)
+    except Exception:
+        log.exception("Gemini rewrite error")
         return None
 
     parsed: _RewriteOutput | None = getattr(resp, "parsed", None)

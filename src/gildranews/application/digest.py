@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import FSInputFile
 
-import ai
-import db
-import tg_writer
-from config import Config
+from gildranews.adapters.ai import gemini as ai
+from gildranews.adapters.persistence import sqlite as db
+from gildranews.adapters.publishing import telegram as tg_writer
+from gildranews.config import Config
 
 log = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ def _html_escape(s: str) -> str:
 
 def _build_digest_html(intro: str, sections, items_by_id: dict[int, dict]) -> str:
     """Собирает финальный HTML-текст дайджеста с встроенными ссылками."""
-    today = datetime.now(timezone.utc).strftime("%d.%m.%Y")
+    today = datetime.now(UTC).strftime("%d.%m.%Y")
     blocks: list[str] = []
     blocks.append(f"<b>🗓 Дайджест недели · {today}</b>")
     if intro:
