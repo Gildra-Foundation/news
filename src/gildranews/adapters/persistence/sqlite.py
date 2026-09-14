@@ -186,6 +186,16 @@ async def claim_message(channel: str, message_id: int) -> bool:
     return cur.rowcount > 0
 
 
+async def release_claim(channel: str, message_id: int) -> None:
+    """Allow a transiently failed item to be retried by the next polling run."""
+    db = await _get_conn()
+    await db.execute(
+        "DELETE FROM seen_messages WHERE channel = ? AND message_id = ?",
+        (_normalize(channel), message_id),
+    )
+    await db.commit()
+
+
 # ---------- Runs ----------
 async def record_run(fetched: int, selected: int, published: int, error: str | None) -> None:
     db = await _get_conn()

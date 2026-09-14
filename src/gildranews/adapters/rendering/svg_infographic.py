@@ -45,7 +45,6 @@ def render_svg(spec: InfographicSpec) -> str:
             f'<text x="{x + 32}" y="{y + 142}" fill="#cbd5e1" font-size="25" '
             f'font-family="DejaVu Sans, sans-serif">{labels}</text></g>'
         )
-    source = html.escape(spec.source.strip())
     return (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1080" role="img" '
         f'aria-label="{html.escape(spec.title, quote=True)}">'
@@ -59,8 +58,7 @@ def render_svg(spec: InfographicSpec) -> str:
         f'<text x="90" y="215" fill="#f8fafc" font-size="60" font-weight="700" '
         f'font-family="DejaVu Sans, sans-serif">{title}</text>'
         + "".join(cards)
-        + f'<text x="90" y="1010" fill="#64748b" font-size="20" '
-        f'font-family="DejaVu Sans, sans-serif">{source}</text></svg>'
+        + "</svg>"
     )
 
 

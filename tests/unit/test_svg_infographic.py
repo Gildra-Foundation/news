@@ -23,6 +23,7 @@ def test_svg_infographic_is_self_contained_and_escapes_content() -> None:
     assert root.tag.endswith("svg")
     assert root.attrib["viewBox"] == "0 0 1080 1080"
     assert "OpenAI &lt; Anthropic &amp; другие" in svg
+    assert "example.com/report" not in svg
     hrefs = [value for element in root.iter() for key, value in element.attrib.items() if key.endswith("href")]
     assert all(value.startswith(("#", "data:")) for value in hrefs)
     assert "<image" not in svg
