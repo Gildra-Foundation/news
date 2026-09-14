@@ -161,6 +161,10 @@ async def test_luna_news_analysis_uses_full_wow_context_and_hides_source() -> No
     assert "классовый комплект" in app_server.system.lower()
     assert "off-piece" in app_server.system.lower()
     assert "смена внешнего вида" in app_server.system.lower()
+    assert "кратко, но полно" in app_server.system.lower()
+    assert "250–600 символов" in app_server.system.lower()
+    assert "не вырезай условие, дату, число или исключение" in app_server.system.lower()
+    assert "простыми русскими конструкциями" in app_server.system.lower()
     assert "World of Warcraft" in app_server.system
     assert "карта фактов" in app_server.system.lower()
     assert "не указывай источник" in app_server.system.lower()
