@@ -1,18 +1,25 @@
-"""Парсинг постов из X (Twitter) и Reddit по публичной ссылке.
+"""Парсинг X/Reddit ссылок через явные платные и бесплатные маршруты.
 
-X — через FxTwitter (free, no auth): https://api.fxtwitter.com/_/status/<id>
-Reddit — через нативный .json эндпойнт.
+GetXAPI и RedditAPIs используются только при включённых флагах. Затем идут
+бесплатные FxTwitter/Reddit JSON и явно включённый Scrape.do fallback.
+Ответы принимаются только после проверки контрактом ParsesUnix.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
 import httpx
+from web_scraper import ResponseContract, validate_response
+from web_scraper.fetchers import RawResponse
+from web_scraper.providers.base import ProviderError, ProviderRequest
+from web_scraper.providers.scrape_do import ScrapeDoProvider
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +57,7 @@ def _get_http() -> httpx.AsyncClient:
         )
     return _http_client
 
+
 TWITTER_RE = re.compile(
     r"https?://(?:mobile\.|www\.)?(?:twitter\.com|x\.com)/[^/\s]+/status/(\d+)",
     re.IGNORECASE,
@@ -81,6 +89,7 @@ class ExternalPost:
     subreddit: str = ""      # сабреддит без префикса
     title: str = ""          # отдельный заголовок (Reddit) / полное имя репо (GitHub)
     meta: dict = field(default_factory=dict)  # доп. структурированные данные (для рендера)
+
     # Backward-compat alias
     @property
     def image_url(self) -> str | None:
@@ -114,19 +123,151 @@ async def fetch(url: str) -> ExternalPost | None:
     return None
 
 
+def _enabled(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _validated_json(
+    response: httpx.Response,
+    required_path_options: tuple[tuple[str, ...], ...],
+    source: str,
+) -> object | None:
+    raw = RawResponse(
+        requested_url=str(response.request.url),
+        final_url=str(response.url),
+        status=response.status_code,
+        headers=dict(response.headers),
+        body=response.content,
+    )
+    return _validated_raw_json(raw, required_path_options, source)
+
+
+def _validated_raw_json(
+    raw: RawResponse,
+    required_path_options: tuple[tuple[str, ...], ...],
+    source: str,
+) -> object | None:
+    for required_paths in required_path_options:
+        result = validate_response(
+            raw,
+            ResponseContract.json(required_json_paths=required_paths),
+        )
+        if result.transport_validated:
+            try:
+                return json.loads(raw.body)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                break
+    log.warning("%s response rejected by ParsesUnix contract", source)
+    return None
+
+
+async def _fetch_scrape_do_json(
+    url: str,
+    required_path_options: tuple[tuple[str, ...], ...],
+    source: str,
+) -> object | None:
+    if not os.getenv("SCRAPE_DO_TOKEN", "").strip() or not _enabled("SCRAPE_DO_ENABLED"):
+        return None
+    try:
+        response = await asyncio.to_thread(
+            ScrapeDoProvider().fetch,
+            ProviderRequest(url=url, strategy_id="normal", timeout_seconds=30),
+        )
+    except ProviderError as exc:
+        log.warning("Scrape.do fallback failed for %s: %s", source, exc.__class__.__name__)
+        return None
+    raw = RawResponse(
+        requested_url=url,
+        final_url=response.final_url or url,
+        status=response.target_status,
+        headers=response.headers,
+        body=response.body,
+        elapsed_ms=response.latency_ms,
+        truncated=response.truncated,
+    )
+    return _validated_raw_json(raw, required_path_options, f"Scrape.do/{source}")
+
+
+def _post_from_getxapi(tweet: dict) -> ExternalPost | None:
+    text = str(tweet.get("text") or "").strip()
+    if not text:
+        return None
+
+    media_url: str | None = None
+    media_type: Literal["photo", "video", "none"] = "none"
+    media = tweet.get("media") or []
+    if isinstance(media, dict):
+        media = [media]
+    for item in media:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("type") or "").lower()
+        if kind in {"video", "animated_gif", "gif"}:
+            media_url = item.get("videoUrl") or item.get("url") or item.get("media_url_https")
+            if media_url:
+                media_type = "video"
+                break
+        if media_type == "none" and kind in {"photo", "image"}:
+            media_url = item.get("url") or item.get("media_url_https")
+            if media_url:
+                media_type = "photo"
+
+    author_data = tweet.get("author") or {}
+    screen_name = str(author_data.get("userName") or author_data.get("screen_name") or "")
+    tweet_id = str(tweet.get("id") or "")
+    return ExternalPost(
+        source="twitter",
+        text=text,
+        media_url=str(media_url) if media_url else None,
+        media_type=media_type,
+        author=str(author_data.get("name") or screen_name),
+        source_url=str(tweet.get("url") or f"https://x.com/i/status/{tweet_id}"),
+        screen_name=screen_name,
+        meta={
+            "avatar_url": str(
+                author_data.get("profilePicture") or author_data.get("avatar_url") or ""
+            ),
+            "verified": bool(author_data.get("isVerified") or author_data.get("isBlueVerified")),
+        },
+    )
+
+
+async def _fetch_getxapi(tweet_id: str) -> ExternalPost | None:
+    key = os.getenv("GETXAPI_KEY", "").strip()
+    if not key or not _enabled("GETXAPI_ENABLED"):
+        return None
+    try:
+        response = await _get_http().get(
+            "https://api.getxapi.com/twitter/tweet/detail",
+            params={"id": tweet_id},
+            headers={"Accept": "application/json", "Authorization": f"Bearer {key}"},
+        )
+    except httpx.HTTPError as exc:
+        log.warning("GetXAPI network error: %s", exc.__class__.__name__)
+        return None
+    payload = _validated_json(response, (("data.id", "data.text"),), "GetXAPI")
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+        return None
+    return _post_from_getxapi(payload["data"])
+
+
 async def _fetch_tweet(tweet_id: str) -> ExternalPost | None:
+    if post := await _fetch_getxapi(tweet_id):
+        return post
     url = f"https://api.fxtwitter.com/i/status/{tweet_id}"
+    data: object | None = None
     try:
         r = await _get_http().get(url, headers={"Accept": "application/json"})
     except httpx.HTTPError as e:
         log.warning("FxTwitter network error: %s", e)
-        return None
-    if r.status_code != 200:
-        log.warning("FxTwitter %s for tweet %s", r.status_code, tweet_id)
-        return None
-    try:
-        data = r.json()
-    except ValueError:
+    else:
+        if r.status_code == 200:
+            data = _validated_json(r, (("tweet.text",),), "FxTwitter")
+        else:
+            log.warning("FxTwitter %s for tweet %s", r.status_code, tweet_id)
+    if data is None:
+        data = await _fetch_scrape_do_json(url, (("tweet.text",),), "FxTwitter")
+    if not isinstance(data, dict):
         return None
 
     tweet = data.get("tweet") or {}
@@ -186,6 +327,8 @@ async def _fetch_tweet(tweet_id: str) -> ExternalPost | None:
 
 
 async def _fetch_reddit(subreddit: str, post_id: str) -> ExternalPost | None:
+    if post := await _fetch_redditapis(post_id):
+        return post
     # old.reddit.com и raw_json=1 — мягче к ботам и без HTML-эскейпов.
     # Если 403 — пробуем www-домен как fallback.
     urls = [
@@ -202,11 +345,20 @@ async def _fetch_reddit(subreddit: str, post_id: str) -> ExternalPost | None:
         if r.status_code == 200:
             break
         log.warning("Reddit %s for %s/%s via %s", r.status_code, subreddit, post_id, url.split("/")[2])
-    if r is None or r.status_code != 200:
-        return None
-    try:
-        data = r.json()
-    except ValueError:
+    data: object | None = None
+    if r is not None and r.status_code == 200:
+        data = _validated_json(
+            r,
+            (("0.data.children.0.data.id",),),
+            "Reddit",
+        )
+    if data is None:
+        data = await _fetch_scrape_do_json(
+            urls[0],
+            (("0.data.children.0.data.id",),),
+            "Reddit",
+        )
+    if not isinstance(data, list):
         return None
     try:
         post = data[0]["data"]["children"][0]["data"]
@@ -262,6 +414,63 @@ async def _fetch_reddit(subreddit: str, post_id: str) -> ExternalPost | None:
         subreddit=subreddit,
         title=title,
     )
+
+
+def _post_from_redditapis(post: dict) -> ExternalPost | None:
+    title = str(post.get("title") or "").strip()
+    selftext = str(post.get("text") or post.get("selftext") or "").strip()
+    text = f"{title}\n\n{selftext}" if title and selftext else title or selftext
+    if not text:
+        return None
+
+    media_url: str | None = None
+    media_type: Literal["photo", "video", "none"] = "none"
+    link_url = str(post.get("link_url") or "")
+    path = link_url.lower().split("?", 1)[0]
+    if path.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        media_url, media_type = link_url, "photo"
+    elif path.endswith((".mp4", ".webm", ".mov")):
+        media_url, media_type = link_url, "video"
+
+    permalink = str(post.get("permalink") or "")
+    source_url = str(post.get("url") or "")
+    if permalink:
+        source_url = f"https://reddit.com{permalink}"
+    return ExternalPost(
+        source="reddit",
+        text=text,
+        media_url=media_url,
+        media_type=media_type,
+        author=f"u/{post['author']}" if post.get("author") else "",
+        source_url=source_url or f"https://reddit.com/comments/{post.get('id', '')}",
+        subreddit=str(post.get("subreddit") or ""),
+        title=title,
+    )
+
+
+async def _fetch_redditapis(post_id: str) -> ExternalPost | None:
+    key = os.getenv("REDDITAPIS_KEY", "").strip()
+    if not key or not _enabled("REDDITAPIS_ENABLED"):
+        return None
+    try:
+        response = await _get_http().get(
+            f"https://api.redditapis.com/api/reddit/post/{post_id}",
+            headers={"Accept": "application/json", "Authorization": f"Bearer {key}"},
+        )
+    except httpx.HTTPError as exc:
+        log.warning("RedditAPIs network error: %s", exc.__class__.__name__)
+        return None
+    payload = _validated_json(
+        response,
+        (("id", "title"), ("post.id", "post.title")),
+        "RedditAPIs",
+    )
+    if not isinstance(payload, dict):
+        return None
+    candidate = payload.get("post", payload)
+    if not isinstance(candidate, dict):
+        return None
+    return _post_from_redditapis(candidate)
 
 
 # Часть README, которую отдаём Gemini. README может быть мегабайты, нам

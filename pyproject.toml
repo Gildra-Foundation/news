@@ -18,6 +18,7 @@ dependencies = [
     "pydantic>=2.0",
     "python-dotenv>=1.0",
     "telethon>=1.36",
+    "web-scraper-core @ https://github.com/Manacost-Labs/ParsesUnix/archive/6c0820d0b2a6c279225a0f3f53e2cdd24a0e5a3e.zip",
 ]
 
 [project.optional-dependencies]
@@ -29,6 +30,7 @@ dev = [
 
 [project.scripts]
 gildranews = "gildranews.__main__:run"
+gildranews-api-keys = "gildranews.configure_keys:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

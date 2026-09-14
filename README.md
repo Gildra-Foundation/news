@@ -147,7 +147,22 @@ cp .env.example .env
 | `RSS_ENABLED` | `true` включает автономный RSS-поллинг |
 | `RSS_FEED_URLS` | RSS-ленты через запятую; по умолчанию Wowhead |
 
-### 3. Авторизация Telethon (один раз)
+Опциональные ключи GetXAPI, RedditAPIs и Scrape.do удобно вводить без отображения
+в терминале и без ручного редактирования `.env`:
+
+```bash
+gildranews-api-keys --enable-paid
+```
+
+Команда сохраняет `.env` с правами `0600`. Без `--enable-paid` она только
+обновляет ключи; платные маршруты остаются выключенными.
+
+### 3. Авторизация Telethon (опционально)
+
+Для RSS и web-источников пропустите этот шаг: бот запускается через Bot API без
+пользовательской Telegram-сессии и без SMS-кода.
+
+Если позднее понадобится читать чужие Telegram-каналы, создайте сессию один раз:
 
 ```bash
 docker compose run --rm newsbot python -m gildranews.init_session
@@ -203,7 +218,8 @@ docker compose up -d --force-recreate
 | 🐙 GitHub | `github.com/owner/repo` |
 
 Бот:
-1. Скачает контент (FxTwitter для X, нативный JSON для Reddit, GitHub API)
+1. Скачает контент (GetXAPI/RedditAPIs, если явно включены; затем бесплатные
+   FxTwitter/Reddit JSON; при блокировке — явно включённый Scrape.do через ParsesUnix)
 2. Переведёт + переформулирует через Gemini
 3. Отрендерит карточку через Pillow если нет родного фото
 4. Покажет **превью с 4 кнопками**:
@@ -322,6 +338,14 @@ ADMIN_USER_ID=123456789
 # Gemini
 GEMINI_API_KEY=AIzaSy...
 GEMINI_MODEL=gemini-3.1-flash-lite
+
+# Опциональные платные маршруты (без enabled=true запросов не будет)
+GETXAPI_KEY=...
+GETXAPI_ENABLED=false
+REDDITAPIS_KEY=...
+REDDITAPIS_ENABLED=false
+SCRAPE_DO_TOKEN=...
+SCRAPE_DO_ENABLED=false
 
 # Расписание
 LOOKBACK_MINUTES=45         # окно поллинга
