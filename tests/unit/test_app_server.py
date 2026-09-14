@@ -258,6 +258,47 @@ async def test_luna_drops_reference_query_not_present_in_source() -> None:
 
 
 @pytest.mark.asyncio
+async def test_luna_returns_typed_warcraft_entities_without_accepting_ids() -> None:
+    processor = AppServerContentAI(
+        _StubAppServer(
+            {
+                "is_news": True,
+                "reason": "Изменение способности",
+                "title": "Огненный шар усилят",
+                "body": "Урон способности повысится.",
+                "hashtag": "классы",
+                "references": [
+                    {
+                        "label": "Огненный шар",
+                        "query": "Fireball",
+                        "kind": "spell",
+                        "branch": "classic",
+                        "role": "primary",
+                        "external_id": 999999,
+                        "icon_url": "https://evil.example/icon.png",
+                    }
+                ],
+            },
+        ),
+    )
+
+    result = await processor.filter_and_rewrite(
+        "Classic Fireball damage will be increased.", [], [],
+    )
+
+    assert result is not None
+    assert len(result.references) == 1
+    reference = result.references[0]
+    assert (reference.query, reference.kind, reference.branch, reference.role) == (
+        "Fireball",
+        "spell",
+        "classic",
+        "primary",
+    )
+    assert not hasattr(reference, "external_id")
+
+
+@pytest.mark.asyncio
 async def test_luna_uses_reddit_editorial_policy_for_community_topics() -> None:
     app_server = _StubAppServer(
         {

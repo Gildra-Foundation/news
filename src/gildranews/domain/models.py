@@ -85,11 +85,67 @@ class InfographicSpec:
     source: str = ""
 
 
+WarcraftBranch = Literal["retail", "classic", "forever"]
+WarcraftEntityKind = Literal[
+    "class",
+    "specialization",
+    "spell",
+    "talent",
+    "item",
+    "cosmetic",
+    "transmog_set",
+    "mount",
+    "pet",
+    "achievement",
+    "raid",
+    "dungeon",
+    "boss",
+    "creature",
+    "faction",
+    "profession",
+    "event",
+]
+WarcraftEntityRole = Literal["primary", "secondary"]
+
+
 @dataclass(frozen=True, slots=True)
-class EntityReference:
+class WarcraftEntityRef:
     label: str
     query: str
-    kind: Literal["raid", "creature"]
+    kind: WarcraftEntityKind
+    branch: WarcraftBranch = "retail"
+    role: WarcraftEntityRole = "secondary"
+
+
+# Backwards-compatible import used by existing integrations.
+EntityReference = WarcraftEntityRef
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedWarcraftEntity:
+    branch: WarcraftBranch
+    kind: WarcraftEntityKind
+    external_id: int
+    canonical_name: str
+    localized_name: str
+    page_url: str
+    icon_url: str
+
+    @property
+    def key(self) -> str:
+        return f"{self.branch}:{self.kind}:{self.external_id}"
+
+
+@dataclass(frozen=True, slots=True)
+class TelegramEmojiAsset:
+    custom_emoji_id: str
+    file_id: str
+    sticker_set_name: str
+    fallback: str
+
+    @property
+    def html(self) -> str:
+        return f'<tg-emoji emoji-id="{self.custom_emoji_id}">{self.fallback}</tg-emoji>'
 
 
 @dataclass

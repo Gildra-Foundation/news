@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -18,6 +18,9 @@ from gildranews.domain.models import (
     InfographicSpec,
     PublishedPostContext,
     Rewrite,
+    WarcraftBranch,
+    WarcraftEntityKind,
+    WarcraftEntityRole,
 )
 
 if TYPE_CHECKING:
@@ -37,7 +40,7 @@ _FILTER_JSON_SUFFIX = """
 Верни только JSON без Markdown и пояснений:
 {"is_news":true,"reason":"...","title":"...","body":"...","emoji_theme":"...","hashtag":"...","infographic":null,"references":[]}
 infographic может быть объектом с полями kicker, title, facts (2–4 объектов value/label), source="". Каждое value должно дословно встречаться во входном post. Для отклонённой новости infographic=null. Не добавляй источник, URL или название издания в title/body.
-references — не более двух объектов {"label":"русский текст, дословно присутствующий в title/body","query":"исходное английское имя, дословно присутствующее в post","kind":"raid или creature"}. Добавляй только рейд или существо, для которого полезна справочная ссылка Wowhead. URL не придумывай: его найдёт бот. Для остальных случаев references=[].
+references — не более трёх объектов {"label":"русский текст из title/body","query":"точное исходное английское имя из post","kind":"class|specialization|spell|talent|item|cosmetic|transmog_set|mount|pet|achievement|raid|dungeon|boss|creature|faction|profession|event","branch":"retail|classic|forever","role":"primary|secondary"}. URL, ID и изображения не придумывай: их найдёт бот. Главную изменяемую сущность пометь primary, остальные secondary. Для остальных случаев references=[].
 """
 
 _RUSSIAN_REPAIR_PROMPT = """Ты — выпускающий редактор русскоязычного канала о World of Warcraft.
@@ -49,7 +52,7 @@ _RUSSIAN_REPAIR_PROMPT = """Ты — выпускающий редактор р�
 — сохрани без изменений все числа, версии, отрицания, статус события и причинно-следственные связи;
 — ничего не добавляй из памяти и не указывай источник.
 
-Верни только JSON без Markdown: {"title":"...","body":"...","hashtag":"...","references":[{"label":"русское название из title/body","query":"точное английское имя из source_text","kind":"raid или creature"}]}.
+Верни только JSON без Markdown: {"title":"...","body":"...","hashtag":"...","references":[{"label":"русское название из title/body","query":"точное английское имя из source_text","kind":"spell","branch":"retail","role":"primary"}]}.
 """
 
 
@@ -68,7 +71,9 @@ class _InfographicOutput(BaseModel):
 class _ReferenceOutput(BaseModel):
     label: str
     query: str
-    kind: Literal["raid", "creature"]
+    kind: WarcraftEntityKind
+    branch: WarcraftBranch = "retail"
+    role: WarcraftEntityRole = "secondary"
 
 
 class _RewriteOutput(BaseModel):
@@ -135,8 +140,16 @@ def _references(
         query = value.query.strip()
         if not label or not query or label not in published_text or query.casefold() not in source_key:
             continue
-        references.append(EntityReference(label=label, query=query, kind=value.kind))
-        if len(references) == 2:
+        references.append(
+            EntityReference(
+                label=label,
+                query=query,
+                kind=value.kind,
+                branch=value.branch,
+                role=value.role,
+            )
+        )
+        if len(references) == 3:
             break
     return tuple(references)
 
