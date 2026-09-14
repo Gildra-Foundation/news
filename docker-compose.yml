@@ -5,6 +5,11 @@ services:
     container_name: newsbot
     restart: unless-stopped
     env_file: .env
+    environment:
+      APP_SERVER_URL: http://host.docker.internal:4202/ag-ui
+      APP_SERVER_TOKEN_FILE: /app/data/app_server_token
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/app/data
     stop_grace_period: 15s

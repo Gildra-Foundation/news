@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -45,6 +46,22 @@ def _csv(key: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:
     if not raw:
         return default
     return tuple(value.strip() for value in raw.split(",") if value.strip())
+
+
+def _secret(key: str, file_key: str, default_file: str) -> str:
+    direct = os.getenv(key, "").strip()
+    if direct:
+        return direct
+    path = os.getenv(file_key, default_file).strip()
+    if not path:
+        return ""
+    try:
+        value = Path(path).read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return ""
+    if not value or len(value) > 4_096 or "\n" in value or "\r" in value:
+        raise RuntimeError(f"Некорректный секрет в {file_key}")
+    return value
 
 
 @dataclass(frozen=True)
@@ -115,7 +132,11 @@ def load() -> Config:
         rss_feed_urls=rss_feed_urls,
         ai_provider=ai_provider,
         app_server_url=app_server_url,
-        app_server_token=os.getenv("APP_SERVER_TOKEN", "").strip(),
+        app_server_token=_secret(
+            "APP_SERVER_TOKEN",
+            "APP_SERVER_TOKEN_FILE",
+            "/app/data/app_server_token",
+        ),
         app_server_model=os.getenv("APP_SERVER_MODEL", "gpt-5.6-luna").strip() or "gpt-5.6-luna",
         app_server_reasoning_effort=(
             os.getenv("APP_SERVER_REASONING_EFFORT", "xhigh").strip() or "xhigh"

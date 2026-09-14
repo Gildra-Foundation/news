@@ -1,0 +1,27 @@
+[Unit]
+Description=GildraNews Codex Luna bridge
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=debian
+Group=ai-agents
+WorkingDirectory=/srv/projects/agents/GildraNews
+Environment=PYTHONPATH=/srv/projects/agents/GildraNews/src
+Environment=CODEX_BRIDGE_BIND=127.0.0.1
+Environment=CODEX_BRIDGE_PORT=4202
+Environment=CODEX_BRIDGE_TOKEN_FILE=/srv/projects/agents/GildraNews/data/app_server_token
+EnvironmentFile=-/etc/default/gildranews-codex-bridge
+ExecStart=/usr/bin/python3 -m gildranews.codex_bridge
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/srv/projects/agents/GildraNews
+ReadWritePaths=/home/debian/.codex
+
+[Install]
+WantedBy=multi-user.target
