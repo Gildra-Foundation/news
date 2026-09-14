@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import os.path
@@ -17,12 +18,13 @@ from aiogram.types import (
 )
 
 from gildranews.adapters.rendering import cards as render_post
+from gildranews.adapters.rendering.svg_infographic import render_png as render_infographic
 from gildranews.adapters.sources import external as external_fetch
 
 LINK_RE = re.compile(r"(?:https?://)?t\.me/(c/)?([\w_]+)/(\d+)", re.IGNORECASE)
 
 from gildranews import config
-from gildranews.adapters.ai import gemini as ai
+from gildranews.adapters.ai.provider import build_content_ai
 from gildranews.adapters.emoji import catalog as emoji_store
 from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.publishing import telegram as tg_writer
@@ -90,6 +92,7 @@ async def run_bot() -> None:
 
     bot = tg_writer.make_bot(cfg.bot_token)
     dp = tg_writer.make_dispatcher(cfg.admin_user_id, cfg.target_channel)
+    content_ai = build_content_ai(cfg)
 
     # Автоподписка на источники, чтобы NewMessage events приходили
     sources = await db.list_sources()
@@ -97,7 +100,7 @@ async def run_bot() -> None:
         await tg_reader.ensure_joined(tele_client, src)
 
     _notify_admin = partial(notify_admin, bot, cfg)
-    register_realtime_handler(tele_client, bot, cfg, _notify_admin)
+    register_realtime_handler(tele_client, bot, cfg, _notify_admin, content_ai)
 
     # ------- Команды бота -------
     def _is_admin(message: Message) -> bool:
@@ -110,7 +113,9 @@ async def run_bot() -> None:
         if not _is_admin(message):
             return
         await message.answer("Запускаю прогон…")
-        result = await pipeline.run_once(tele_client, bot, cfg, on_result=_notify_admin)
+        result = await pipeline.run_once(
+            tele_client, bot, cfg, on_result=_notify_admin, news_filter=content_ai,
+        )
         if result.get("error"):
             await message.answer(
                 f"Готово с ошибкой.\nПолучено: {result['fetched']}, "
@@ -128,7 +133,7 @@ async def run_bot() -> None:
         if not _is_admin(message):
             return
         await message.answer("Собираю еженедельный дайджест…")
-        result = await digest_mod.build_and_publish(bot, cfg)
+        result = await digest_mod.build_and_publish(bot, cfg, content_ai=content_ai)
         if result.get("published"):
             await message.answer(
                 f"✅ Дайджест опубликован. Пунктов: {result.get('posts_count', 0)}"
@@ -168,18 +173,18 @@ async def run_bot() -> None:
 
         await message.answer(
             f"Беру пост https://t.me/{used}/{post.message_id} "
-            f"(медиа: {len(post.media_messages)}), рерайт через Gemini…"
+            f"(медиа: {len(post.media_messages)}), рерайт через {cfg.app_server_model if cfg.ai_provider == 'app_server' else cfg.gemini_model}…"
         )
 
         try:
-            rewrite = await ai.rewrite_only(cfg.gemini_api_key, cfg.gemini_model, post.text)
+            rewrite = await content_ai.rewrite(post.text)
         except Exception as e:
-            log.exception("Gemini rewrite failed")
-            await message.answer(f"Gemini ошибка: {type(e).__name__}: {e}")
+            log.exception("AI rewrite failed")
+            await message.answer(f"AI-сервис: {type(e).__name__}: {e}")
             return
 
         if not rewrite:
-            await message.answer("Gemini вернул некорректный ответ.")
+            await message.answer("AI-сервис вернул некорректный ответ.")
             return
 
         emap = emoji_store.load()
@@ -237,7 +242,9 @@ async def run_bot() -> None:
             return
 
         try:
-            result = await pipeline.process_post(tele_client, bot, cfg, post, force=True)
+            result = await pipeline.process_post(
+                tele_client, bot, cfg, post, force=True, news_filter=content_ai,
+            )
         except Exception as e:
             log.exception("force process_post failed")
             await message.answer(f"⚠️ Ошибка: {type(e).__name__}: {e}")
@@ -270,20 +277,12 @@ async def run_bot() -> None:
             return
 
         if post.source == "github":
-            rewrite = await ai.summarize_github(
-                api_key=cfg.gemini_api_key,
-                model=cfg.gemini_model,
-                source_text=post.text,
-            )
+            rewrite = await content_ai.summarize_github(post.text)
         else:
-            rewrite = await ai.translate_and_format(
-                api_key=cfg.gemini_api_key,
-                model=cfg.gemini_model,
-                source_text=post.text,
-            )
+            rewrite = await content_ai.translate(post.text)
         if not rewrite:
             await message.answer(
-                "Gemini не справился с обработкой. Попробуйте ещё раз."
+                "AI-сервис не справился с обработкой. Попробуйте ещё раз."
             )
             return
 
@@ -312,7 +311,11 @@ async def run_bot() -> None:
             screenshot_path: str | None = None
             try:
                 screenshot_path = render_post.screenshot_path_for(draft_id)
-                if post.source == "twitter":
+                if rewrite.infographic is not None and await asyncio.to_thread(
+                    render_infographic, rewrite.infographic, screenshot_path,
+                ):
+                    pass
+                elif post.source == "twitter":
                     # Подкачиваем аватарку автора (если есть)
                     avatar_path = None
                     avatar_url = post.meta.get("avatar_url") or ""
@@ -541,22 +544,16 @@ async def run_bot() -> None:
         await message.answer("Применяю правку…")
         src_url = draft.get("source_url") or ""
         if src_url.startswith(("https://github.com", "http://github.com")):
-            rewrite = await ai.summarize_github(
-                api_key=cfg.gemini_api_key,
-                model=cfg.gemini_model,
-                source_text=draft["original_text"],
-                edit_instruction=text,
+            rewrite = await content_ai.summarize_github(
+                draft["original_text"], edit_instruction=text,
             )
         else:
-            rewrite = await ai.translate_and_format(
-                api_key=cfg.gemini_api_key,
-                model=cfg.gemini_model,
-                source_text=draft["original_text"],
-                edit_instruction=text,
+            rewrite = await content_ai.translate(
+                draft["original_text"], edit_instruction=text,
             )
         if not rewrite:
             await db.set_pending_edit(uid, draft_id)  # вернуть состояние
-            await message.answer("Gemini не справился. Попробуйте описать правку иначе.")
+            await message.answer("AI-сервис не справился. Попробуйте описать правку иначе.")
             return
         await db.update_draft(draft_id, rewrite.title, rewrite.body, rewrite.hashtag)
         await drafts.send_preview(bot, message.chat.id, draft_id)
@@ -625,7 +622,7 @@ async def run_bot() -> None:
                 f"Backup-поллинг каждые {cfg.interval_minutes} мин подхватит."
             )
 
-    jobs = ScheduledJobs(tele_client, bot, cfg, _notify_admin)
+    jobs = ScheduledJobs(tele_client, bot, cfg, _notify_admin, content_ai)
     jobs.start()
 
     try:
@@ -645,6 +642,10 @@ async def run_bot() -> None:
             await external_fetch.close_http()
         except Exception:
             log.warning("close_http raised", exc_info=True)
+        try:
+            await content_ai.aclose()
+        except Exception:
+            log.warning("content_ai.aclose raised", exc_info=True)
         try:
             await db.close()
         except Exception:

@@ -10,6 +10,7 @@ from telethon import TelegramClient, events
 from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.sources import telegram as telegram_source
 from gildranews.application import process_news
+from gildranews.application.ports import NewsFilter
 from gildranews.config import Config
 from gildranews.domain.models import ProcessResult
 
@@ -24,6 +25,7 @@ def register_realtime_handler(
     bot: Bot,
     cfg: Config,
     on_result: ResultCallback,
+    news_filter: NewsFilter,
 ) -> None:
     album_buffers: dict[int, list] = {}
     album_tasks: set[asyncio.Task] = set()
@@ -33,7 +35,9 @@ def register_realtime_handler(
         if not post:
             return
         try:
-            result = await process_news.process_post(client, bot, cfg, post)
+            result = await process_news.process_post(
+                client, bot, cfg, post, news_filter=news_filter,
+            )
             log.info("real-time @%s/%s -> %s", post.channel, post.message_id, result.status)
             await on_result(result)
         except Exception:

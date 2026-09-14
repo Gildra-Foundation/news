@@ -1,0 +1,10 @@
+services:
+  newsbot:
+    networks:
+      - default
+      - manacost
+
+networks:
+  manacost:
+    external: true
+    name: ${MANACOST_DOCKER_NETWORK}

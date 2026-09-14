@@ -12,6 +12,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-dejavu-core \
     fonts-noto-color-emoji \
+    librsvg2-bin \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md ./

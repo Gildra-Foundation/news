@@ -10,9 +10,10 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import FSInputFile
 
-from gildranews.adapters.ai import gemini as ai
+from gildranews.adapters.ai.provider import build_content_ai
 from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.publishing import telegram as tg_writer
+from gildranews.application.ports import ContentAI
 from gildranews.config import Config
 
 log = logging.getLogger(__name__)
@@ -59,7 +60,9 @@ def _build_digest_html(intro: str, sections, items_by_id: dict[int, dict]) -> st
     return "\n\n".join(blocks)
 
 
-async def build_and_publish(bot: Bot, cfg: Config) -> dict:
+async def build_and_publish(
+    bot: Bot, cfg: Config, content_ai: ContentAI | None = None,
+) -> dict:
     """Собирает посты за 7 дней, отправляет в Gemini для дайджеста, публикует
     в канал с обложкой. Возвращает {published: bool, target_msg_id, posts_count, reason}."""
     posts = await db.recent_published_for_digest(days=7)
@@ -77,13 +80,10 @@ async def build_and_publish(bot: Bot, cfg: Config) -> dict:
             "body_excerpt": (p["body"] or "")[:400],
         })
 
-    digest = await ai.make_weekly_digest(
-        api_key=cfg.gemini_api_key,
-        model=cfg.gemini_model,
-        posts=ai_input,
-    )
+    processor = content_ai or build_content_ai(cfg)
+    digest = await processor.make_weekly_digest(ai_input)
     if digest is None or not digest.sections:
-        return {"published": False, "reason": "Gemini не вернул дайджест"}
+        return {"published": False, "reason": "AI-сервис не вернул дайджест"}
 
     text = _build_digest_html(digest.intro, digest.sections, items_by_id)
     if len(text) > 1024:

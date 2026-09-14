@@ -3,14 +3,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import tempfile
+from pathlib import Path
 
 from aiogram import Bot
 from telethon import TelegramClient
 
-from gildranews.adapters.ai import gemini as ai
+from gildranews.adapters.ai.provider import build_content_ai
 from gildranews.adapters.emoji import catalog as emoji_store
 from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.publishing import telegram as tg_writer
+from gildranews.adapters.rendering.svg_infographic import render_png
 from gildranews.adapters.sources import telegram as tg_reader
 from gildranews.application.ports import NewsFilter
 from gildranews.config import Config
@@ -108,23 +110,20 @@ async def process_post(
     emoji_themes = emoji_store.themes_for_prompt(emoji_map)
 
     try:
-        processor = news_filter or ai.GeminiNewsFilter(
-            api_key=cfg.gemini_api_key,
-            model=cfg.gemini_model,
-        )
+        processor = news_filter or build_content_ai(cfg)
         filt = await processor.filter_and_rewrite(
             text=post.text,
             recent_titles=recent_titles,
             emoji_themes=emoji_themes,
         )
     except Exception as e:
-        log.exception("Ошибка фильтра Gemini для @%s/%s", post.channel, post.message_id)
+        log.exception("Ошибка AI-фильтра для @%s/%s", post.channel, post.message_id)
         return ProcessResult("ai_error", post.channel, post.message_id, reason=f"{type(e).__name__}: {e}")
 
     if filt is None:
         return ProcessResult(
             "ai_error", post.channel, post.message_id,
-            reason="Gemini не вернул валидный ответ",
+            reason="AI-сервис не вернул валидный ответ",
         )
 
     if not filt.is_news:
@@ -134,6 +133,10 @@ async def process_post(
     try:
         with tempfile.TemporaryDirectory(prefix="newsbot_rt_") as tmpdir:
             media = await tg_reader.download_post_media(client, post, tmpdir)
+            if not media and filt.infographic is not None:
+                infographic_path = Path(tmpdir) / "infographic.png"
+                if await asyncio.to_thread(render_png, filt.infographic, infographic_path):
+                    media = [str(infographic_path)]
             # Если в title/body упомянута конкретная компания/инструмент/язык —
             # подменяем категорию Gemini на специализированный лого
             emoji_theme = filt.emoji_theme

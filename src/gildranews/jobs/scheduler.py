@@ -14,6 +14,7 @@ from telethon import TelegramClient
 from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.rendering import cards
 from gildranews.application import digest, process_news
+from gildranews.application.ports import ContentAI
 from gildranews.config import Config
 from gildranews.domain.models import ProcessResult
 
@@ -39,11 +40,13 @@ class ScheduledJobs:
         bot: Bot,
         cfg: Config,
         on_result: ResultCallback,
+        content_ai: ContentAI,
     ) -> None:
         self._client = client
         self._bot = bot
         self._cfg = cfg
         self._on_result = on_result
+        self._content_ai = content_ai
         self._scheduler = AsyncIOScheduler(timezone="UTC")
         self._startup_tasks: set[asyncio.Task] = set()
 
@@ -53,6 +56,7 @@ class ScheduledJobs:
             self._bot,
             self._cfg,
             on_result=self._on_result,
+            news_filter=self._content_ai,
         )
 
     async def cleanup(self) -> None:
@@ -75,7 +79,9 @@ class ScheduledJobs:
 
     async def publish_digest(self) -> None:
         try:
-            result = await digest.build_and_publish(self._bot, self._cfg)
+            result = await digest.build_and_publish(
+                self._bot, self._cfg, content_ai=self._content_ai,
+            )
             log.info("Weekly digest: %s", result)
             if not self._cfg.admin_user_id:
                 return
