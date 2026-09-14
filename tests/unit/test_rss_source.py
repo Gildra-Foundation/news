@@ -8,6 +8,7 @@ from gildranews.adapters.sources.rss import (
     MAX_FEED_BYTES,
     extract_article_media,
     parse_feed,
+    source_key,
 )
 
 WOWHEAD_FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
@@ -32,6 +33,24 @@ WOWHEAD_FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
 </rss>
 """
 
+ICY_VEINS_FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:content="http://purl.org/rss/1.0/modules/content/" version="2.0">
+  <channel>
+    <title>Icy Veins - Feed</title>
+    <item>
+      <title>Blizzard Confirms a Midnight Change</title>
+      <link>https://www.icy-veins.com/wow/news/blizzard-confirms-a-midnight-change/</link>
+      <guid isPermaLink="false">https://www.icy-veins.com/wow/news/blizzard-confirms-a-midnight-change/</guid>
+      <pubDate>Mon, 14 Sep 2026 16:59:58 +0000</pubDate>
+      <description><![CDATA[A short summary.]]></description>
+      <content:encoded><![CDATA[
+        Blizzard confirmed a concrete change for Midnight Patch 12.2.
+      ]]></content:encoded>
+    </item>
+  </channel>
+</rss>
+"""
+
 
 def test_parse_wowhead_feed_normalizes_article_for_ai() -> None:
     items = parse_feed(WOWHEAD_FEED, source="wowhead")
@@ -48,6 +67,17 @@ def test_parse_wowhead_feed_normalizes_article_for_ai() -> None:
     assert "SetSVG" in item.content
     assert "https://" not in item.ai_text
     assert "Wowhead" not in item.ai_text
+
+
+def test_parse_icy_veins_feed_uses_stable_source_and_hides_attribution() -> None:
+    source = source_key("https://wp-prod.icy-veins.com/custom-rss/?category=wow")
+    items = parse_feed(ICY_VEINS_FEED, source=source)
+
+    assert source == "icy-veins"
+    assert len(items) == 1
+    assert items[0].source == "icy-veins"
+    assert "Midnight Patch 12.2" in items[0].content
+    assert "Icy Veins" not in items[0].ai_text
 
 
 def test_parse_feed_rejects_oversized_document() -> None:

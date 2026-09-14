@@ -128,6 +128,8 @@ def source_key(url: str) -> str:
     host = (urlparse(url).hostname or "").lower().removeprefix("www.")
     if host == "wowhead.com" or host.endswith(".wowhead.com"):
         return "wowhead"
+    if host == "icy-veins.com" or host.endswith(".icy-veins.com"):
+        return "icy-veins"
     return f"rss:{host}" if host else "rss"
 
 

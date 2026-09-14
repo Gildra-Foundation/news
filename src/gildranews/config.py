@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DEFAULT_RSS_FEED_URL = "https://www.wowhead.com/news/rss/all"
+ICY_VEINS_RSS_FEED_URL = "https://wp-prod.icy-veins.com/custom-rss/?category=wow"
+DEFAULT_RSS_FEED_URLS = (DEFAULT_RSS_FEED_URL, ICY_VEINS_RSS_FEED_URL)
 DEFAULT_REDDIT_SUBREDDITS = ("wow", "competitivewow", "wownoob")
 DEFAULT_X_SEARCH_QUERY = (
     '"World of Warcraft" OR Warcraft lang:en min_faves:20 '
@@ -96,7 +98,7 @@ class Config:
     max_posts_per_run: int
     telegram_reader_enabled: bool = False
     rss_enabled: bool = True
-    rss_feed_urls: tuple[str, ...] = (DEFAULT_RSS_FEED_URL,)
+    rss_feed_urls: tuple[str, ...] = DEFAULT_RSS_FEED_URLS
     ai_provider: str = "app_server"
     app_server_url: str = "http://agent-codex:4202/ag-ui"
     app_server_token: str = ""
@@ -141,7 +143,7 @@ def load() -> Config:
             "Для TELEGRAM_READER_ENABLED=true задайте TG_API_ID и TG_API_HASH"
         )
     rss_enabled = _bool("RSS_ENABLED", True)
-    rss_feed_urls = _csv("RSS_FEED_URLS", (DEFAULT_RSS_FEED_URL,))
+    rss_feed_urls = _csv("RSS_FEED_URLS", DEFAULT_RSS_FEED_URLS)
     if rss_enabled and not rss_feed_urls:
         raise RuntimeError("Для RSS_ENABLED=true задайте хотя бы один RSS_FEED_URLS")
     reddit_enabled = _bool("REDDITAPIS_ENABLED")

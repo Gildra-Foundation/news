@@ -18,7 +18,10 @@ def test_load_allows_bot_api_mode_without_telethon_credentials(monkeypatch) -> N
     assert cfg.tg_api_hash == ""
     assert cfg.telegram_reader_enabled is False
     assert cfg.rss_enabled is True
-    assert cfg.rss_feed_urls == ("https://www.wowhead.com/news/rss/all",)
+    assert cfg.rss_feed_urls == (
+        "https://www.wowhead.com/news/rss/all",
+        "https://wp-prod.icy-veins.com/custom-rss/?category=wow",
+    )
 
 
 def test_load_enables_daily_reddit_topics_with_existing_api_key(monkeypatch) -> None:

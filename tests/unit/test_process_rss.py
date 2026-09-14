@@ -222,6 +222,7 @@ async def test_run_once_processes_only_items_inside_lookback(monkeypatch) -> Non
         lookback_minutes=45,
         interval_minutes=30,
         max_posts_per_run=3,
+        rss_feed_urls=("https://www.wowhead.com/news/rss/all",),
     )
 
     result = await process_rss.run_once(
