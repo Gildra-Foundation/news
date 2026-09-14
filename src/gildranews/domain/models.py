@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypedDict
+
+
+class PublishedPostContext(TypedDict):
+    title: str
+    body: str
+    posted_at: str
 
 
 @dataclass(frozen=True, slots=True)

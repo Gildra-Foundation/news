@@ -6,6 +6,8 @@ from collections.abc import Iterable
 
 import aiosqlite
 
+from gildranews.domain.models import PublishedPostContext
+
 log = logging.getLogger(__name__)
 
 DB_PATH = "data/newsbot.db"
@@ -274,6 +276,31 @@ async def recent_published_titles(hours: int = 24, limit: int = 50) -> list[str]
         (f"-{hours} hours", limit),
     ) as cur:
         return [row[0] async for row in cur]
+
+
+async def recent_published_context(
+    hours: int = 48,
+    limit: int = 50,
+) -> list[PublishedPostContext]:
+    """Return bounded recent post bodies so AI can detect semantic duplicates."""
+    bounded_hours = max(1, min(hours, 168))
+    bounded_limit = max(1, min(limit, 100))
+    db = await _get_conn()
+    async with db.execute(
+        """SELECT title, body, posted_at FROM published_posts
+           WHERE posted_at >= datetime('now', ?)
+           ORDER BY id DESC LIMIT ?""",
+        (f"-{bounded_hours} hours", bounded_limit),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [
+        {
+            "title": row[0],
+            "body": row[1][:1_000],
+            "posted_at": row[2],
+        }
+        for row in rows
+    ]
 
 
 # ---------- Drafts ----------

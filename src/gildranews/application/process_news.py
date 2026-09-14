@@ -105,7 +105,10 @@ async def process_post(
         if not await db.claim_message(post.channel, post.message_id):
             return ProcessResult("duplicate", post.channel, post.message_id)
 
-    recent_titles = await db.recent_published_titles(hours=24, limit=50)
+    recent_posts = await db.recent_published_context(
+        hours=cfg.dedup_context_hours,
+        limit=cfg.dedup_context_limit,
+    )
     emoji_map = emoji_store.load()
     emoji_themes = emoji_store.themes_for_prompt(emoji_map)
 
@@ -113,7 +116,7 @@ async def process_post(
         processor = news_filter or build_content_ai(cfg)
         filt = await processor.filter_and_rewrite(
             text=post.text,
-            recent_titles=recent_titles,
+            recent_posts=recent_posts,
             emoji_themes=emoji_themes,
         )
     except Exception as e:

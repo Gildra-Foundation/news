@@ -3,14 +3,14 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Protocol
 
-from gildranews.domain.models import FilterResult, Rewrite
+from gildranews.domain.models import FilterResult, PublishedPostContext, Rewrite
 
 
 class NewsFilter(Protocol):
     async def filter_and_rewrite(
         self,
         text: str,
-        recent_titles: Sequence[str],
+        recent_posts: Sequence[PublishedPostContext],
         emoji_themes: Sequence[dict[str, str]],
     ) -> FilterResult | None: ...
 

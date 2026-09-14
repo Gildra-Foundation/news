@@ -11,10 +11,16 @@ from gildranews.domain.models import FilterResult
 
 
 class AcceptingNewsAI:
-    async def filter_and_rewrite(self, text, recent_titles, emoji_themes):
+    async def filter_and_rewrite(self, text, recent_posts, emoji_themes):
         assert "Minimap Addon Tech" in text
         assert "wowhead.com" not in text.lower()
-        assert recent_titles == ["Старая новость"]
+        assert recent_posts == [
+            {
+                "title": "Старая новость",
+                "body": "Blizzard уже меняла эту механику.",
+                "posted_at": "2026-09-14 10:00:00",
+            },
+        ]
         return FilterResult(
             is_news=True,
             reason="Изменится работа аддонов",
@@ -25,7 +31,7 @@ class AcceptingNewsAI:
 
 
 class FailingNewsAI:
-    async def filter_and_rewrite(self, text, recent_titles, emoji_themes):
+    async def filter_and_rewrite(self, text, recent_posts, emoji_themes):
         raise RuntimeError("temporary outage")
 
 
@@ -37,8 +43,16 @@ async def test_process_rss_item_publishes_without_source_attribution(monkeypatch
     async def claim_message(channel: str, message_id: int) -> bool:
         return True
 
-    async def recent_titles(hours: int, limit: int) -> list[str]:
-        return ["Старая новость"]
+    async def recent_context(hours: int, limit: int) -> list[dict[str, str]]:
+        assert hours == 48
+        assert limit == 50
+        return [
+            {
+                "title": "Старая новость",
+                "body": "Blizzard уже меняла эту механику.",
+                "posted_at": "2026-09-14 10:00:00",
+            },
+        ]
 
     async def publish(bot, target_channel: str, text: str, media_files=None) -> int:
         published.update(text=text, media_files=media_files, target_channel=target_channel)
@@ -54,7 +68,7 @@ async def test_process_rss_item_publishes_without_source_attribution(monkeypatch
         )
 
     monkeypatch.setattr(process_rss.db, "claim_message", claim_message)
-    monkeypatch.setattr(process_rss.db, "recent_published_titles", recent_titles)
+    monkeypatch.setattr(process_rss.db, "recent_published_context", recent_context)
     monkeypatch.setattr(process_rss.db, "record_published", record_published)
     monkeypatch.setattr(process_rss.emoji_store, "load", dict)
     monkeypatch.setattr(process_rss.emoji_store, "themes_for_prompt", lambda _emap: [])
@@ -107,14 +121,14 @@ async def test_process_rss_item_releases_claim_when_ai_is_temporarily_unavailabl
     async def claim_message(channel: str, message_id: int) -> bool:
         return True
 
-    async def recent_titles(hours: int, limit: int) -> list[str]:
+    async def recent_context(hours: int, limit: int) -> list[dict[str, str]]:
         return []
 
     async def release_claim(channel: str, message_id: int) -> None:
         released.append((channel, message_id))
 
     monkeypatch.setattr(process_rss.db, "claim_message", claim_message)
-    monkeypatch.setattr(process_rss.db, "recent_published_titles", recent_titles)
+    monkeypatch.setattr(process_rss.db, "recent_published_context", recent_context)
     monkeypatch.setattr(process_rss.db, "release_claim", release_claim)
     monkeypatch.setattr(process_rss.emoji_store, "load", dict)
     monkeypatch.setattr(process_rss.emoji_store, "themes_for_prompt", lambda _emap: [])

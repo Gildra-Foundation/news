@@ -35,12 +35,15 @@ async def process_item(
             "duplicate", item.source, item.external_id, source_url=item.article_url,
         )
 
-    recent_titles = await db.recent_published_titles(hours=48, limit=100)
+    recent_posts = await db.recent_published_context(
+        hours=cfg.dedup_context_hours,
+        limit=cfg.dedup_context_limit,
+    )
     emoji_map = emoji_store.load()
     try:
         analysis = await content_ai.filter_and_rewrite(
             text=item.ai_text[:MAX_AI_INPUT_CHARS],
-            recent_titles=recent_titles,
+            recent_posts=recent_posts,
             emoji_themes=emoji_store.themes_for_prompt(emoji_map),
         )
     except Exception as exc:

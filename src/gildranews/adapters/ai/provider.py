@@ -11,7 +11,13 @@ from gildranews.adapters.ai import gemini
 from gildranews.adapters.ai.app_server import AppServerClient, AppServerError
 from gildranews.adapters.editor.manacost import EditorClient
 from gildranews.application.translation_qa import check_translation
-from gildranews.domain.models import FilterResult, InfographicFact, InfographicSpec, Rewrite
+from gildranews.domain.models import (
+    FilterResult,
+    InfographicFact,
+    InfographicSpec,
+    PublishedPostContext,
+    Rewrite,
+)
 
 if TYPE_CHECKING:
     from gildranews.config import Config
@@ -144,14 +150,14 @@ class AppServerContentAI:
     async def filter_and_rewrite(
         self,
         text: str,
-        recent_titles: Sequence[str],
+        recent_posts: Sequence[PublishedPostContext],
         emoji_themes: Sequence[dict[str, str]],
     ) -> FilterResult | None:
         output = await self._complete(
             gemini.FILTER_PROMPT + _FILTER_JSON_SUFFIX,
             {
                 "post": text[:12_000],
-                "recent_published": list(recent_titles),
+                "recent_published": list(recent_posts),
                 "available_emoji_themes": list(emoji_themes),
             },
             _FilterOutput,
@@ -227,8 +233,8 @@ class GeminiContentAI:
         self._model = model
         self._filter = gemini.GeminiNewsFilter(api_key, model)
 
-    async def filter_and_rewrite(self, text, recent_titles, emoji_themes):
-        return await self._filter.filter_and_rewrite(text, recent_titles, emoji_themes)
+    async def filter_and_rewrite(self, text, recent_posts, emoji_themes):
+        return await self._filter.filter_and_rewrite(text, recent_posts, emoji_themes)
 
     async def translate(self, source_text, edit_instruction=None):
         return await gemini.translate_and_format(self._api_key, self._model, source_text, edit_instruction)

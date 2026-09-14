@@ -11,9 +11,15 @@ from gildranews.domain.models import FilterResult
 
 
 class RejectingNewsFilter:
-    async def filter_and_rewrite(self, text, recent_titles, emoji_themes):
+    async def filter_and_rewrite(self, text, recent_posts, emoji_themes):
         assert text == "Исходный текст"
-        assert recent_titles == ["Старая новость"]
+        assert recent_posts == [
+            {
+                "title": "Старая новость",
+                "body": "Старый текст",
+                "posted_at": "2026-09-14 10:00:00",
+            },
+        ]
         assert emoji_themes == [{"key": "release", "desc": "Релиз"}]
         return FilterResult(is_news=False, reason="не подходит аудитории")
 
@@ -23,11 +29,19 @@ async def test_process_post_uses_injected_news_filter(monkeypatch) -> None:
     async def claim_message(channel: str, message_id: int) -> bool:
         return True
 
-    async def recent_titles(hours: int, limit: int) -> list[str]:
-        return ["Старая новость"]
+    async def recent_context(hours: int, limit: int) -> list[dict[str, str]]:
+        assert hours == 48
+        assert limit == 50
+        return [
+            {
+                "title": "Старая новость",
+                "body": "Старый текст",
+                "posted_at": "2026-09-14 10:00:00",
+            },
+        ]
 
     monkeypatch.setattr(process_news.db, "claim_message", claim_message)
-    monkeypatch.setattr(process_news.db, "recent_published_titles", recent_titles)
+    monkeypatch.setattr(process_news.db, "recent_published_context", recent_context)
     monkeypatch.setattr(
         process_news.emoji_store,
         "load",

@@ -142,12 +142,21 @@ async def test_luna_news_analysis_uses_full_wow_context_and_hides_source() -> No
     processor = AppServerContentAI(app_server)
     source_text = "World of Warcraft " + ("x" * 5_000) + " final fact"
 
-    result = await processor.filter_and_rewrite(source_text, [], [])
+    recent_posts = [
+        {
+            "title": "Blizzard меняет механику миникарты",
+            "body": "Ранее компания ограничила подсказки аддонов в подземельях.",
+            "posted_at": "2026-09-13 12:00:00",
+        },
+    ]
+    result = await processor.filter_and_rewrite(source_text, recent_posts, [])
 
     payload = json.loads(app_server.user)
     assert result is not None
     assert len(payload["post"]) > 3_000
     assert "final fact" in payload["post"]
+    assert payload["recent_published"] == recent_posts
+    assert "без новых существенных фактов" in app_server.system.lower()
     assert "World of Warcraft" in app_server.system
     assert "карта фактов" in app_server.system.lower()
     assert "не указывай источник" in app_server.system.lower()

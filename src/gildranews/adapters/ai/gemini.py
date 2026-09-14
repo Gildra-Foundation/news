@@ -11,7 +11,7 @@ from google.genai import types
 from pydantic import BaseModel, ValidationError
 
 from gildranews.adapters.ai.prompts import WOW_NEWS_ANALYSIS_PROMPT
-from gildranews.domain.models import FilterResult, Rewrite
+from gildranews.domain.models import FilterResult, PublishedPostContext, Rewrite
 
 log = logging.getLogger(__name__)
 
@@ -49,14 +49,14 @@ class GeminiNewsFilter:
     async def filter_and_rewrite(
         self,
         text: str,
-        recent_titles: Sequence[str],
+        recent_posts: Sequence[PublishedPostContext],
         emoji_themes: Sequence[dict[str, str]],
     ) -> FilterResult | None:
         return await filter_and_rewrite(
             api_key=self.api_key,
             model=self.model,
             text=text,
-            recent_titles=list(recent_titles),
+            recent_posts=list(recent_posts),
             emoji_themes=list(emoji_themes),
         )
 
@@ -140,18 +140,18 @@ async def filter_and_rewrite(
     api_key: str,
     model: str,
     text: str,
-    recent_titles: list[str] | None = None,
+    recent_posts: list[PublishedPostContext] | None = None,
     emoji_themes: list[dict] | None = None,
 ) -> FilterResult | None:
     """Single-post фильтр для real-time. None — если Gemini упал/вернул мусор.
     FilterResult с is_news=False — фильтр отказал (с reason).
     FilterResult с is_news=True — публикуем (с title/body/reason).
-    recent_titles — недавно опубликованные, для дедупликации."""
+    recent_posts — недавно опубликованные посты с текстом, для дедупликации."""
     if not text.strip():
         return None
     payload = {
         "post": text[:12_000],
-        "recent_published": recent_titles or [],
+        "recent_published": recent_posts or [],
         "available_emoji_themes": emoji_themes or [],
     }
     client = _gemini(api_key)

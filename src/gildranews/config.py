@@ -22,6 +22,13 @@ def _int(key: str, default: int) -> int:
     return int(raw) if raw else default
 
 
+def _bounded_int(key: str, default: int, *, minimum: int, maximum: int) -> int:
+    value = _int(key, default)
+    if not minimum <= value <= maximum:
+        raise RuntimeError(f"{key} должен быть от {minimum} до {maximum}")
+    return value
+
+
 def _bool(key: str, default: bool = False) -> bool:
     raw = os.getenv(key, "").strip().lower()
     if not raw:
@@ -63,6 +70,8 @@ class Config:
     ai_timeout_seconds: int = 240
     editor_url: str = "http://editor-gateway:8080/v2/edit"
     editor_token: str = ""
+    dedup_context_hours: int = 48
+    dedup_context_limit: int = 50
 
 def load() -> Config:
     target = _required("TARGET_CHANNEL")
@@ -116,4 +125,10 @@ def load() -> Config:
             "EDITOR_URL", "http://editor-gateway:8080/v2/edit",
         ).strip(),
         editor_token=os.getenv("EDITOR_TOKEN", "").strip(),
+        dedup_context_hours=_bounded_int(
+            "DEDUP_CONTEXT_HOURS", 48, minimum=1, maximum=168,
+        ),
+        dedup_context_limit=_bounded_int(
+            "DEDUP_CONTEXT_LIMIT", 50, minimum=1, maximum=100,
+        ),
     )
