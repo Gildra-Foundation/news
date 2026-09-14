@@ -165,6 +165,8 @@ async def test_luna_news_analysis_uses_full_wow_context_and_hides_source() -> No
     assert "250–600 символов" in app_server.system.lower()
     assert "не вырезай условие, дату, число или исключение" in app_server.system.lower()
     assert "простыми русскими конструкциями" in app_server.system.lower()
+    assert "не пиши «level 20»" in app_server.system.lower()
+    assert "число — в value" in app_server.system.lower()
     assert "World of Warcraft" in app_server.system
     assert "карта фактов" in app_server.system.lower()
     assert "не указывай источник" in app_server.system.lower()
