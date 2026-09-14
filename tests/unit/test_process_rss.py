@@ -7,7 +7,12 @@ import pytest
 from gildranews.adapters.sources.rss import RSSItem
 from gildranews.application import process_rss
 from gildranews.config import Config
-from gildranews.domain.models import FilterResult, InfographicFact, InfographicSpec
+from gildranews.domain.models import (
+    EntityReference,
+    FilterResult,
+    InfographicFact,
+    InfographicSpec,
+)
 
 
 class AcceptingNewsAI:
@@ -40,7 +45,7 @@ class RaidNewsAI:
         return FilterResult(
             is_news=True,
             reason="Ослабление рейда",
-            title="Боссов рейда дополнительно ослабят",
+            title="В «Ядовитой Бездне» дополнительно ослабят боссов",
             body="Урон нескольких механик снизят.",
             hashtag="новости",
             infographic=InfographicSpec(
@@ -48,6 +53,13 @@ class RaidNewsAI:
                 facts=(
                     InfographicFact(value="25%", label="снижение"),
                     InfographicFact(value="8", label="существ за волну"),
+                ),
+            ),
+            references=(
+                EntityReference(
+                    label="Ядовитой Бездне",
+                    query="Venomous Abyss",
+                    kind="raid",
                 ),
             ),
         )
@@ -169,7 +181,12 @@ async def test_icy_veins_uses_article_raid_cover_instead_of_infographic(
 
     async def publish(bot, target_channel: str, text: str, media_files=None) -> int:
         published["media_files"] = media_files
+        published["text"] = text
         return 88
+
+    async def resolve_reference(query, kind):
+        assert (query, kind) == ("Venomous Abyss", "raid")
+        return "https://www.wowhead.com/zone=16915"
 
     async def record_published(*args, **kwargs) -> None:
         return None
@@ -182,6 +199,11 @@ async def test_icy_veins_uses_article_raid_cover_instead_of_infographic(
     monkeypatch.setattr(process_rss.rss_source, "fetch_article_media", fetch_article_media)
     monkeypatch.setattr(process_rss.media_downloader, "download", download)
     monkeypatch.setattr(process_rss.tg_writer, "publish", publish)
+    monkeypatch.setattr(
+        process_rss.wowhead_references,
+        "resolve_reference",
+        resolve_reference,
+    )
 
     cfg = Config(
         tg_api_id=0,
@@ -213,6 +235,10 @@ async def test_icy_veins_uses_article_raid_cover_instead_of_infographic(
     media_path, media_kind = published["media_files"][0]
     assert media_path.endswith("/raid.webp")
     assert media_kind == "photo"
+    assert (
+        '<a href="https://www.wowhead.com/zone=16915">Ядовитой Бездне</a>'
+        in published["text"]
+    )
 
 
 @pytest.mark.asyncio

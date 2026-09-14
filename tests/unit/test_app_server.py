@@ -190,14 +190,26 @@ async def test_luna_repairs_untranslated_raid_terms_before_publication() -> None
             {
                 "is_news": True,
                 "reason": "Ослабление рейда",
-                "title": "В Venomous Abyss ослабят механики",
-                "body": "У Sszorak способность Caustic Claws больше не создаёт Caustic Residue.",
+                "title": "В Ядовитой Бездне ослабят механики",
+                "body": "У Сзорака способность Caustic Claws больше не создаёт едкую лужу.",
                 "hashtag": "новости",
             },
             {
                 "title": "В Ядовитой Бездне ослабят механики",
                 "body": "У Сзорака едкие когти больше не оставляют едкие лужи.",
                 "hashtag": "новости",
+                "references": [
+                    {
+                        "label": "Ядовитой Бездне",
+                        "query": "Venomous Abyss",
+                        "kind": "raid",
+                    },
+                    {
+                        "label": "Сзорака",
+                        "query": "Sszorak",
+                        "kind": "creature",
+                    },
+                ],
             },
         ],
     )
@@ -212,6 +224,37 @@ async def test_luna_repairs_untranslated_raid_terms_before_publication() -> None
     assert result is not None
     assert result.title == "В Ядовитой Бездне ослабят механики"
     assert result.body == "У Сзорака едкие когти больше не оставляют едкие лужи."
+    assert [(ref.label, ref.query, ref.kind) for ref in result.references] == [
+        ("Ядовитой Бездне", "Venomous Abyss", "raid"),
+        ("Сзорака", "Sszorak", "creature"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_luna_drops_reference_query_not_present_in_source() -> None:
+    processor = AppServerContentAI(
+        _StubAppServer(
+            {
+                "is_news": True,
+                "reason": "Ослабление рейда",
+                "title": "В Ядовитой Бездне ослабят боссов",
+                "body": "Изменения упростят прохождение.",
+                "hashtag": "новости",
+                "references": [
+                    {
+                        "label": "Ядовитой Бездне",
+                        "query": "Invented Raid",
+                        "kind": "raid",
+                    }
+                ],
+            },
+        ),
+    )
+
+    result = await processor.filter_and_rewrite("Venomous Abyss raid tuning", [], [])
+
+    assert result is not None
+    assert result.references == ()
 
 
 @pytest.mark.asyncio

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -12,6 +12,7 @@ from gildranews.adapters.ai.app_server import AppServerClient, AppServerError
 from gildranews.adapters.editor.manacost import EditorClient
 from gildranews.application.translation_qa import check_translation, untranslated_terms
 from gildranews.domain.models import (
+    EntityReference,
     FilterResult,
     InfographicFact,
     InfographicSpec,
@@ -34,8 +35,9 @@ _JSON_SUFFIX = """
 _FILTER_JSON_SUFFIX = """
 
 Верни только JSON без Markdown и пояснений:
-{"is_news":true,"reason":"...","title":"...","body":"...","emoji_theme":"...","hashtag":"...","infographic":null}
+{"is_news":true,"reason":"...","title":"...","body":"...","emoji_theme":"...","hashtag":"...","infographic":null,"references":[]}
 infographic может быть объектом с полями kicker, title, facts (2–4 объектов value/label), source="". Каждое value должно дословно встречаться во входном post. Для отклонённой новости infographic=null. Не добавляй источник, URL или название издания в title/body.
+references — не более двух объектов {"label":"русский текст, дословно присутствующий в title/body","query":"исходное английское имя, дословно присутствующее в post","kind":"raid или creature"}. Добавляй только рейд или существо, для которого полезна справочная ссылка Wowhead. URL не придумывай: его найдёт бот. Для остальных случаев references=[].
 """
 
 _RUSSIAN_REPAIR_PROMPT = """Ты — выпускающий редактор русскоязычного канала о World of Warcraft.
@@ -47,7 +49,7 @@ _RUSSIAN_REPAIR_PROMPT = """Ты — выпускающий редактор р�
 — сохрани без изменений все числа, версии, отрицания, статус события и причинно-следственные связи;
 — ничего не добавляй из памяти и не указывай источник.
 
-Верни только JSON без Markdown: {"title":"...","body":"...","hashtag":"..."}.
+Верни только JSON без Markdown: {"title":"...","body":"...","hashtag":"...","references":[{"label":"русское название из title/body","query":"точное английское имя из source_text","kind":"raid или creature"}]}.
 """
 
 
@@ -63,11 +65,18 @@ class _InfographicOutput(BaseModel):
     source: str = ""
 
 
+class _ReferenceOutput(BaseModel):
+    label: str
+    query: str
+    kind: Literal["raid", "creature"]
+
+
 class _RewriteOutput(BaseModel):
     title: str
     body: str
     hashtag: str = ""
     infographic: _InfographicOutput | None = None
+    references: list[_ReferenceOutput] = Field(default_factory=list)
 
 
 class _FilterOutput(_RewriteOutput):
@@ -110,6 +119,26 @@ def _infographic(value: _InfographicOutput | None, source: str) -> InfographicSp
         ),
         source="",
     )
+
+
+def _references(
+    values: list[_ReferenceOutput],
+    source: str,
+    title: str,
+    body: str,
+) -> tuple[EntityReference, ...]:
+    source_key = source.casefold()
+    published_text = f"{title}\n{body}"
+    references: list[EntityReference] = []
+    for value in values:
+        label = value.label.strip()
+        query = value.query.strip()
+        if not label or not query or label not in published_text or query.casefold() not in source_key:
+            continue
+        references.append(EntityReference(label=label, query=query, kind=value.kind))
+        if len(references) == 2:
+            break
+    return tuple(references)
 
 
 class AppServerContentAI:
@@ -157,6 +186,7 @@ class AppServerContentAI:
             body=body,
             hashtag=output.hashtag.strip(),
             infographic=_infographic(output.infographic, source),
+            references=_references(output.references, source, title, body),
         )
 
     async def filter_and_rewrite(
@@ -209,6 +239,15 @@ class AppServerContentAI:
                 body=repaired.body,
                 hashtag=repaired.hashtag or rewrite.hashtag,
                 infographic=rewrite.infographic,
+                references=(
+                    _references(
+                        repaired_output.references,
+                        text,
+                        repaired.title,
+                        repaired.body,
+                    )
+                    or rewrite.references
+                ),
             )
         return FilterResult(
             is_news=True,
@@ -218,6 +257,7 @@ class AppServerContentAI:
             emoji_theme=output.emoji_theme.strip(),
             hashtag=rewrite.hashtag,
             infographic=rewrite.infographic,
+            references=rewrite.references,
         )
 
     async def _rewrite_with_prompt(

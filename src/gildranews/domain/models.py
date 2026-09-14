@@ -85,12 +85,20 @@ class InfographicSpec:
     source: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class EntityReference:
+    label: str
+    query: str
+    kind: Literal["raid", "creature"]
+
+
 @dataclass
 class Rewrite:
     title: str
     body: str
     hashtag: str = ""
     infographic: InfographicSpec | None = None
+    references: tuple[EntityReference, ...] = ()
 
 
 @dataclass
@@ -102,6 +110,7 @@ class FilterResult:
     emoji_theme: str = ""
     hashtag: str = ""
     infographic: InfographicSpec | None = None
+    references: tuple[EntityReference, ...] = ()
 
 
 ProcessStatus = Literal[

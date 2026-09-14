@@ -13,6 +13,7 @@ from gildranews.adapters import media as media_downloader
 from gildranews.adapters.emoji import catalog as emoji_store
 from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.publishing import telegram as tg_writer
+from gildranews.adapters.references import wowhead as wowhead_references
 from gildranews.adapters.rendering.svg_infographic import render_png
 from gildranews.adapters.sources import rss as rss_source
 from gildranews.application.ports import ContentAI
@@ -80,12 +81,26 @@ async def process_item(
     emoji_theme = emoji_store.detect_override(
         emoji_map, f"{analysis.title}\n{analysis.body}",
     ) or analysis.emoji_theme
+    inline_links: list[tuple[str, str]] = []
+    resolved_references = await asyncio.gather(
+        *(
+            wowhead_references.resolve_reference(reference.query, reference.kind)
+            for reference in analysis.references
+        ),
+        return_exceptions=True,
+    )
+    for reference, url in zip(analysis.references, resolved_references, strict=True):
+        if isinstance(url, Exception):
+            log.warning("Wowhead reference lookup failed: %s", type(url).__name__)
+        elif url:
+            inline_links.append((reference.label, url))
     post_text = tg_writer.format_post(
         analysis.title,
         analysis.body,
         emoji_theme=emoji_theme,
         emoji_map=emoji_map,
         hashtag_key=analysis.hashtag,
+        inline_links=inline_links,
     )
 
     try:

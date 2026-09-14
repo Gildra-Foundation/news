@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import logging
+import re
+from collections.abc import Sequence
+from html import escape
+from urllib.parse import urlparse
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -29,6 +33,7 @@ HASHTAGS = {
     "дайджест": "#дайджест",
 }
 DEFAULT_HASHTAG_KEY = "полезное"
+_WOWHEAD_ENTITY_PATH_RE = re.compile(r"^/(?:zone|npc)=\d+$")
 
 
 def _is_admin(message: Message, admin_id: int) -> bool:
@@ -130,6 +135,51 @@ def html_escape(s: str) -> str:
     )
 
 
+def _safe_wowhead_url(url: str) -> bool:
+    parsed = urlparse(url)
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname == "www.wowhead.com"
+        and port in {None, 443}
+        and parsed.username is None
+        and parsed.password is None
+        and not parsed.params
+        and not parsed.query
+        and not parsed.fragment
+        and bool(_WOWHEAD_ENTITY_PATH_RE.fullmatch(parsed.path))
+    )
+
+
+def _linkify(
+    text: str,
+    links: list[tuple[str, str]],
+) -> tuple[str, list[tuple[str, str]]]:
+    remaining = list(links)
+    parts: list[str] = []
+    cursor = 0
+    while remaining:
+        matches = [
+            (text.find(label, cursor), -len(label), index, label, url)
+            for index, (label, url) in enumerate(remaining)
+            if label and text.find(label, cursor) >= 0
+        ]
+        if not matches:
+            break
+        position, _negative_length, index, label, url = min(matches)
+        parts.append(html_escape(text[cursor:position]))
+        parts.append(
+            f'<a href="{escape(url, quote=True)}">{html_escape(label)}</a>'
+        )
+        cursor = position + len(label)
+        remaining.pop(index)
+    parts.append(html_escape(text[cursor:]))
+    return "".join(parts), remaining
+
+
 def format_post(
     title: str,
     body: str,
@@ -138,6 +188,7 @@ def format_post(
     original_url: str | None = None,
     tail_url: str | None = None,
     hashtag_key: str = "",
+    inline_links: Sequence[tuple[str, str]] | None = None,
 ) -> str:
     """Финальный пост:
     <b>Title</b> [theme-emoji]\\n\\n
@@ -158,9 +209,17 @@ def format_post(
             fb = html_escape(info["fallback"])
             theme_prefix = f'<tg-emoji emoji-id="{info["id"]}">{fb}</tg-emoji> '
 
+    safe_links = [
+        (label.strip(), url.strip())
+        for label, url in (inline_links or ())
+        if label.strip() and _safe_wowhead_url(url.strip())
+    ]
+    title_html, safe_links = _linkify(title, safe_links)
+    body_html, _unused_links = _linkify(body, safe_links)
+
     blocks: list[str] = []
-    blocks.append(f"{theme_prefix}<b>{html_escape(title)}</b>")
-    blocks.append(html_escape(body))
+    blocks.append(f"{theme_prefix}<b>{title_html}</b>")
+    blocks.append(body_html)
 
     if tail_url:
         # Plain URL — Telegram сам делает его кликабельным

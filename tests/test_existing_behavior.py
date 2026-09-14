@@ -39,6 +39,25 @@ def test_post_formatter_uses_premium_emoji_when_available() -> None:
     assert result.startswith('<tg-emoji emoji-id="123">🚀</tg-emoji> <b>Релиз</b>')
 
 
+def test_post_formatter_embeds_only_safe_wowhead_reference() -> None:
+    result = tg_writer.format_post(
+        title="В «Ядовитой Бездне» ослабят боссов",
+        body="Игрокам станет проще пройти рейд & получить добычу.",
+        hashtag_key="новости",
+        inline_links=[
+            ("Ядовитой Бездне", "https://www.wowhead.com/zone=16915"),
+            ("рейд", "https://evil.example/phishing"),
+        ],
+    )
+
+    assert (
+        '<a href="https://www.wowhead.com/zone=16915">Ядовитой Бездне</a>'
+        in result
+    )
+    assert "evil.example" not in result
+    assert "рейд &amp; получить" in result
+
+
 def test_emoji_override_ignores_invalid_patterns_and_finds_valid_match() -> None:
     emoji_map = {
         "broken": {"id": "1", "fallback": "?", "match_pattern": "["},
