@@ -170,3 +170,26 @@ async def test_luna_news_analysis_uses_full_wow_context_and_hides_source() -> No
     assert "World of Warcraft" in app_server.system
     assert "карта фактов" in app_server.system.lower()
     assert "не указывай источник" in app_server.system.lower()
+
+
+@pytest.mark.asyncio
+async def test_luna_uses_reddit_editorial_policy_for_community_topics() -> None:
+    app_server = _StubAppServer(
+        {
+            "is_news": True,
+            "reason": "Практический совет для игроков",
+            "title": "Игроки нашли короткий маршрут",
+            "body": "Маршрут позволяет пропустить две опасные группы противников.",
+            "hashtag": "советы",
+        },
+    )
+    processor = AppServerContentAI(app_server)
+
+    result = await processor.filter_and_rewrite(
+        "A route skips two dangerous pulls.", [], [], content_kind="reddit_topic",
+    )
+
+    assert result is not None
+    assert "не выдавай мнение" in app_server.system.lower()
+    assert "смысловым дублем" in app_server.system.lower()
+    assert "не указывай reddit" in app_server.system.lower()

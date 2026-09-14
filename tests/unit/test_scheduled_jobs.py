@@ -51,3 +51,40 @@ def test_start_skips_telegram_pipeline_without_reader() -> None:
     assert "news_pipeline" not in scheduled
     assert scheduled == ["rss_pipeline", "db_cleanup", "weekly_digest"]
     assert startup == ["run_rss_pipeline", "cleanup"]
+
+
+def test_start_schedules_reddit_topics_once_per_day() -> None:
+    cfg = Config(
+        tg_api_id=0,
+        tg_api_hash="",
+        bot_token="token",
+        target_channel="@channel",
+        admin_user_id=1,
+        gemini_api_key="",
+        gemini_model="model",
+        lookback_minutes=45,
+        interval_minutes=30,
+        max_posts_per_run=3,
+        reddit_enabled=True,
+        reddit_api_key="secret",
+        reddit_daily_hour_utc=9,
+    )
+    jobs = ScheduledJobs(None, object(), cfg, object(), object())
+    scheduled: list[dict] = []
+
+    class FakeScheduler:
+        def add_job(self, _func, **kwargs) -> None:
+            scheduled.append(kwargs)
+
+        def start(self) -> None:
+            return None
+
+    jobs._scheduler = FakeScheduler()
+    jobs._start_task = lambda coroutine: coroutine.close()
+
+    jobs.start()
+
+    reddit_job = next(job for job in scheduled if job["id"] == "reddit_daily")
+    assert reddit_job["trigger"] == "cron"
+    assert reddit_job["hour"] == 9
+    assert reddit_job["minute"] == 0

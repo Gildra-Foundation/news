@@ -12,6 +12,7 @@ class NewsFilter(Protocol):
         text: str,
         recent_posts: Sequence[PublishedPostContext],
         emoji_themes: Sequence[dict[str, str]],
+        content_kind: str = "news",
     ) -> FilterResult | None: ...
 
 

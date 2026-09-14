@@ -21,6 +21,34 @@ def test_load_allows_bot_api_mode_without_telethon_credentials(monkeypatch) -> N
     assert cfg.rss_feed_urls == ("https://www.wowhead.com/news/rss/all",)
 
 
+def test_load_enables_daily_reddit_topics_with_existing_api_key(monkeypatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TARGET_CHANNEL", "channel")
+    monkeypatch.setenv("AI_PROVIDER", "app_server")
+    monkeypatch.setenv("REDDITAPIS_ENABLED", "true")
+    monkeypatch.setenv("REDDITAPIS_KEY", "reddit-secret")
+    monkeypatch.setenv("REDDIT_SUBREDDITS", "r/worldofwarcraft, competitivewow")
+    monkeypatch.setenv("REDDIT_DAILY_HOUR_UTC", "9")
+
+    cfg = config.load()
+
+    assert cfg.reddit_enabled is True
+    assert cfg.reddit_api_key == "reddit-secret"
+    assert cfg.reddit_subreddits == ("worldofwarcraft", "competitivewow")
+    assert cfg.reddit_daily_hour_utc == 9
+
+
+def test_enabled_reddit_topics_require_api_key(monkeypatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TARGET_CHANNEL", "channel")
+    monkeypatch.setenv("AI_PROVIDER", "app_server")
+    monkeypatch.setenv("REDDITAPIS_ENABLED", "true")
+    monkeypatch.delenv("REDDITAPIS_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="REDDITAPIS_KEY"):
+        config.load()
+
+
 def test_telegram_reader_requires_explicit_enable(monkeypatch) -> None:
     monkeypatch.setenv("BOT_TOKEN", "bot-token")
     monkeypatch.setenv("TARGET_CHANNEL", "@channel")

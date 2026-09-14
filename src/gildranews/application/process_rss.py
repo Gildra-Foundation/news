@@ -31,6 +31,7 @@ async def process_item(
     cfg: Config,
     item: rss_source.RSSItem,
     content_ai: ContentAI,
+    content_kind: str = "news",
 ) -> ProcessResult:
     if not await db.claim_message(item.source, item.external_id):
         return ProcessResult(
@@ -43,11 +44,14 @@ async def process_item(
     )
     emoji_map = emoji_store.load()
     try:
-        analysis = await content_ai.filter_and_rewrite(
-            text=item.ai_text[:MAX_AI_INPUT_CHARS],
-            recent_posts=recent_posts,
-            emoji_themes=emoji_store.themes_for_prompt(emoji_map),
-        )
+        ai_kwargs = {
+            "text": item.ai_text[:MAX_AI_INPUT_CHARS],
+            "recent_posts": recent_posts,
+            "emoji_themes": emoji_store.themes_for_prompt(emoji_map),
+        }
+        if content_kind != "news":
+            ai_kwargs["content_kind"] = content_kind
+        analysis = await content_ai.filter_and_rewrite(**ai_kwargs)
     except Exception as exc:
         log.exception("RSS AI analysis failed for %s/%s", item.source, item.external_id)
         await db.release_claim(item.source, item.external_id)

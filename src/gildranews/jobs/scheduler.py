@@ -13,7 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.rendering import cards
-from gildranews.application import digest, process_rss
+from gildranews.application import digest, process_reddit, process_rss
 from gildranews.application.ports import ContentAI
 from gildranews.config import Config
 from gildranews.domain.models import ProcessResult
@@ -73,6 +73,15 @@ class ScheduledJobs:
             content_ai=self._content_ai,
             on_result=self._on_result,
         )
+
+    async def run_reddit_pipeline(self) -> None:
+        result = await process_reddit.run_once(
+            bot=self._bot,
+            cfg=self._cfg,
+            content_ai=self._content_ai,
+            on_result=self._on_result,
+        )
+        log.info("Daily Reddit topics: %s", result)
 
     async def cleanup(self) -> None:
         try:
@@ -150,6 +159,16 @@ class ScheduledJobs:
                 max_instances=1,
                 coalesce=True,
             )
+            if self._cfg.reddit_enabled:
+                self._scheduler.add_job(
+                    self.run_reddit_pipeline,
+                    trigger="cron",
+                    hour=self._cfg.reddit_daily_hour_utc,
+                    minute=0,
+                    id="reddit_daily",
+                    max_instances=1,
+                    coalesce=True,
+                )
             self._scheduler.start()
             if self._client is not None:
                 log.info(

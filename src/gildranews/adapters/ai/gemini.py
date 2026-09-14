@@ -10,7 +10,7 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, ValidationError
 
-from gildranews.adapters.ai.prompts import WOW_NEWS_ANALYSIS_PROMPT
+from gildranews.adapters.ai.prompts import REDDIT_TOPIC_ANALYSIS_PROMPT, WOW_NEWS_ANALYSIS_PROMPT
 from gildranews.domain.models import FilterResult, PublishedPostContext, Rewrite
 
 log = logging.getLogger(__name__)
@@ -51,6 +51,7 @@ class GeminiNewsFilter:
         text: str,
         recent_posts: Sequence[PublishedPostContext],
         emoji_themes: Sequence[dict[str, str]],
+        content_kind: str = "news",
     ) -> FilterResult | None:
         return await filter_and_rewrite(
             api_key=self.api_key,
@@ -58,6 +59,7 @@ class GeminiNewsFilter:
             text=text,
             recent_posts=list(recent_posts),
             emoji_themes=list(emoji_themes),
+            content_kind=content_kind,
         )
 
 REWRITE_PROMPT = """Ты — редактор Telegram-канала «RuNeuroNews» о новостях и находках в индустрии ИИ.
@@ -94,6 +96,7 @@ BODY — 2–4 абзаца, между абзацами одна пустая �
 """ + HASHTAG_INSTRUCTION
 
 FILTER_PROMPT = WOW_NEWS_ANALYSIS_PROMPT + HASHTAG_INSTRUCTION
+REDDIT_TOPIC_PROMPT = REDDIT_TOPIC_ANALYSIS_PROMPT + HASHTAG_INSTRUCTION
 
 
 # Pydantic-схемы для structured output Gemini
@@ -142,6 +145,7 @@ async def filter_and_rewrite(
     text: str,
     recent_posts: list[PublishedPostContext] | None = None,
     emoji_themes: list[dict] | None = None,
+    content_kind: str = "news",
 ) -> FilterResult | None:
     """Single-post фильтр для real-time. None — если Gemini упал/вернул мусор.
     FilterResult с is_news=False — фильтр отказал (с reason).
@@ -160,7 +164,9 @@ async def filter_and_rewrite(
             model=model,
             contents=json.dumps(payload, ensure_ascii=False),
             config=types.GenerateContentConfig(
-                system_instruction=FILTER_PROMPT,
+                system_instruction=(
+                    REDDIT_TOPIC_PROMPT if content_kind == "reddit_topic" else FILTER_PROMPT
+                ),
                 temperature=0.4,
                 max_output_tokens=4096,
                 response_mime_type="application/json",

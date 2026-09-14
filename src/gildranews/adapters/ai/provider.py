@@ -152,9 +152,14 @@ class AppServerContentAI:
         text: str,
         recent_posts: Sequence[PublishedPostContext],
         emoji_themes: Sequence[dict[str, str]],
+        content_kind: str = "news",
     ) -> FilterResult | None:
         output = await self._complete(
-            gemini.FILTER_PROMPT + _FILTER_JSON_SUFFIX,
+            (
+                gemini.REDDIT_TOPIC_PROMPT
+                if content_kind == "reddit_topic"
+                else gemini.FILTER_PROMPT
+            ) + _FILTER_JSON_SUFFIX,
             {
                 "post": text[:12_000],
                 "recent_published": list(recent_posts),
@@ -233,8 +238,12 @@ class GeminiContentAI:
         self._model = model
         self._filter = gemini.GeminiNewsFilter(api_key, model)
 
-    async def filter_and_rewrite(self, text, recent_posts, emoji_themes):
-        return await self._filter.filter_and_rewrite(text, recent_posts, emoji_themes)
+    async def filter_and_rewrite(
+        self, text, recent_posts, emoji_themes, content_kind="news",
+    ):
+        return await self._filter.filter_and_rewrite(
+            text, recent_posts, emoji_themes, content_kind,
+        )
 
     async def translate(self, source_text, edit_instruction=None):
         return await gemini.translate_and_format(self._api_key, self._model, source_text, edit_instruction)

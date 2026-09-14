@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -9,6 +10,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DEFAULT_RSS_FEED_URL = "https://www.wowhead.com/news/rss/all"
+DEFAULT_REDDIT_SUBREDDITS = ("wow", "competitivewow", "wownoob")
+_SUBREDDIT_RE = re.compile(r"[A-Za-z0-9_]{2,32}\Z")
 
 
 def _required(key: str) -> str:
@@ -89,6 +92,12 @@ class Config:
     editor_token: str = ""
     dedup_context_hours: int = 48
     dedup_context_limit: int = 50
+    reddit_enabled: bool = False
+    reddit_api_key: str = ""
+    reddit_subreddits: tuple[str, ...] = DEFAULT_REDDIT_SUBREDDITS
+    reddit_daily_hour_utc: int = 9
+    reddit_candidates_per_subreddit: int = 15
+    reddit_max_posts_per_day: int = 1
 
 def load() -> Config:
     target = _required("TARGET_CHANNEL")
@@ -116,6 +125,19 @@ def load() -> Config:
     rss_feed_urls = _csv("RSS_FEED_URLS", (DEFAULT_RSS_FEED_URL,))
     if rss_enabled and not rss_feed_urls:
         raise RuntimeError("Для RSS_ENABLED=true задайте хотя бы один RSS_FEED_URLS")
+    reddit_enabled = _bool("REDDITAPIS_ENABLED")
+    reddit_api_key = os.getenv("REDDITAPIS_KEY", "").strip()
+    reddit_subreddits = tuple(
+        value.removeprefix("r/").strip()
+        for value in _csv("REDDIT_SUBREDDITS", DEFAULT_REDDIT_SUBREDDITS)
+        if value.removeprefix("r/").strip()
+    )
+    if reddit_enabled and not reddit_api_key:
+        raise RuntimeError("Для REDDITAPIS_ENABLED=true задайте REDDITAPIS_KEY")
+    if reddit_enabled and not reddit_subreddits:
+        raise RuntimeError("Для REDDITAPIS_ENABLED=true задайте REDDIT_SUBREDDITS")
+    if any(not _SUBREDDIT_RE.fullmatch(value) for value in reddit_subreddits):
+        raise RuntimeError("REDDIT_SUBREDDITS содержит некорректное имя сообщества")
     return Config(
         tg_api_id=tg_api_id,
         tg_api_hash=tg_api_hash,
@@ -151,5 +173,17 @@ def load() -> Config:
         ),
         dedup_context_limit=_bounded_int(
             "DEDUP_CONTEXT_LIMIT", 50, minimum=1, maximum=100,
+        ),
+        reddit_enabled=reddit_enabled,
+        reddit_api_key=reddit_api_key,
+        reddit_subreddits=reddit_subreddits,
+        reddit_daily_hour_utc=_bounded_int(
+            "REDDIT_DAILY_HOUR_UTC", 9, minimum=0, maximum=23,
+        ),
+        reddit_candidates_per_subreddit=_bounded_int(
+            "REDDIT_CANDIDATES_PER_SUBREDDIT", 15, minimum=1, maximum=100,
+        ),
+        reddit_max_posts_per_day=_bounded_int(
+            "REDDIT_MAX_POSTS_PER_DAY", 1, minimum=1, maximum=3,
         ),
     )
