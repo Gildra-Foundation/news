@@ -8,22 +8,8 @@ _NUMBER_RE = re.compile(r"\d+(?:[.,]\d+)?%?")
 _LINK_RE = re.compile(r"https?://[^\s)>]+")
 _CODE_RE = re.compile(r"`[^`]+`")
 _LATIN_WORD_RE = re.compile(r"[A-Za-z]+(?:['’][A-Za-z]+)?")
-_CYRILLIC_WORD_RE = re.compile(r"[А-Яа-яЁё]+")
 _ALLOWED_LATIN_WORDS = frozenset(
     {"blizzard", "forever", "world", "of", "warcraft", "wow"}
-)
-_BANNED_RUSSIAN_STEMS = (
-    "контент",
-    "патч",
-    "трансмог",
-    "левел",
-    "бафф",
-    "нерф",
-    "билд",
-    "ивент",
-)
-_BANNED_SPEC_FORMS = frozenset(
-    {"спек", "спека", "спеку", "спеком", "спеке", "спеки", "спеков", "спекам", "спеками", "спеках"}
 )
 
 
@@ -38,14 +24,6 @@ def untranslated_terms(text: str) -> tuple[str, ...]:
             continue
         seen.add(normalized)
         result.append(term)
-    for match in _CYRILLIC_WORD_RE.finditer(text):
-        term = match.group(0)
-        normalized = term.casefold()
-        if normalized in seen:
-            continue
-        if normalized in _BANNED_SPEC_FORMS or normalized.startswith(_BANNED_RUSSIAN_STEMS):
-            seen.add(normalized)
-            result.append(term)
     return tuple(result)
 
 
