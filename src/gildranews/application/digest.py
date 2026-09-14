@@ -1,5 +1,4 @@
-"""Еженедельный дайджест канала: запрос постов за 7 дней, Gemini-выжимка,
-публикация с фирменной обложкой и хэштегом #дайджест@runeuronews."""
+"""Еженедельный дайджест канала: запрос постов за 7 дней и AI-выжимка."""
 from __future__ import annotations
 
 import logging
@@ -19,11 +18,9 @@ from gildranews.config import Config
 log = logging.getLogger(__name__)
 
 COVER_PATH = "assets/digest_cover.jpg"
-TARGET_CHANNEL_USERNAME = "runeuronews"  # для построения t.me/runeuronews/<id> ссылок
-
-
-def _post_link(target_msg_id: int) -> str:
-    return f"https://t.me/{TARGET_CHANNEL_USERNAME}/{target_msg_id}"
+def _post_link(target_channel: str, target_msg_id: int) -> str:
+    username = target_channel.removeprefix("@").strip()
+    return f"https://t.me/{username}/{target_msg_id}"
 
 
 def _html_escape(s: str) -> str:
@@ -34,7 +31,12 @@ def _html_escape(s: str) -> str:
     )
 
 
-def _build_digest_html(intro: str, sections, items_by_id: dict[int, dict]) -> str:
+def _build_digest_html(
+    intro: str,
+    sections,
+    items_by_id: dict[int, dict],
+    target_channel: str,
+) -> str:
     """Собирает финальный HTML-текст дайджеста с встроенными ссылками."""
     today = datetime.now(UTC).strftime("%d.%m.%Y")
     blocks: list[str] = []
@@ -49,7 +51,7 @@ def _build_digest_html(intro: str, sections, items_by_id: dict[int, dict]) -> st
             row = items_by_id.get(item.id)
             if not row:
                 continue
-            link = _post_link(row["target_message_id"])
+            link = _post_link(target_channel, row["target_message_id"])
             summary = _html_escape(item.summary.strip().rstrip("."))
             section_lines.append(f'• <a href="{link}">{summary}</a>')
         if len(section_lines) > 1:
@@ -85,7 +87,9 @@ async def build_and_publish(
     if digest is None or not digest.sections:
         return {"published": False, "reason": "AI-сервис не вернул дайджест"}
 
-    text = _build_digest_html(digest.intro, digest.sections, items_by_id)
+    text = _build_digest_html(
+        digest.intro, digest.sections, items_by_id, cfg.target_channel,
+    )
     if len(text) > 1024:
         # caption у фото ограничен 1024 видимых символов. Если перебор —
         # шлём картинку без подписи + текстом следом одним сообщением (4096 limit).

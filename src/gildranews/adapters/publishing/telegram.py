@@ -19,14 +19,14 @@ log = logging.getLogger(__name__)
 # При срабатывании — _smart_truncate режет на границе предложения/абзаца.
 BODY_HARD_LIMIT = 780
 
-# Хэштеги канала. Ключи — короткое имя темы, которое выбирает Gemini.
+# Хэштеги канала. Ключи — короткое имя темы, которое выбирает AI-сервис.
 HASHTAGS = {
-    "новости": "#новости@runeuronews",
-    "руководство": "#руководство@runeuronews",
-    "советы": "#советы@runeuronews",
-    "полезное": "#полезное@runeuronews",
-    "обсуждения": "#обсуждения@runeuronews",
-    "дайджест": "#дайджест@runeuronews",
+    "новости": "#новости",
+    "руководство": "#руководство",
+    "советы": "#советы",
+    "полезное": "#полезное",
+    "обсуждения": "#обсуждения",
+    "дайджест": "#дайджест",
 }
 DEFAULT_HASHTAG_KEY = "полезное"
 
@@ -55,7 +55,7 @@ def make_dispatcher(admin_id: int, target_channel: str) -> Dispatcher:
             await message.answer("Этот бот приватный.")
             return
         await message.answer(
-            "RuNeuroNews бот готов.\n\n"
+            "GildraNews бот готов.\n\n"
             "Команды:\n"
             "/sources — список источников\n"
             "/add @канал — добавить источник\n"
@@ -144,7 +144,7 @@ def format_post(
     Body\\n\\n
     [tail_url]\\n\\n
     [<u><i><a>Оригинальный пост</a></i></u>]\\n\\n
-    [#hashtag@runeuronews]
+    [#hashtag]
     """
     title = title.strip()
     body = body.strip()

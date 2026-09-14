@@ -25,7 +25,7 @@ def test_post_formatter_escapes_content_and_uses_selected_hashtag() -> None:
         hashtag_key="новости",
     )
 
-    assert result == "<b>OpenAI &lt;news&gt;</b>\n\nA &amp; B\n\n#новости@runeuronews"
+    assert result == "<b>OpenAI &lt;news&gt;</b>\n\nA &amp; B\n\n#новости"
 
 
 def test_post_formatter_uses_premium_emoji_when_available() -> None:
