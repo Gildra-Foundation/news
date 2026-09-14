@@ -28,14 +28,20 @@ def test_load_enables_daily_reddit_topics_with_existing_api_key(monkeypatch) -> 
     monkeypatch.setenv("REDDITAPIS_ENABLED", "true")
     monkeypatch.setenv("REDDITAPIS_KEY", "reddit-secret")
     monkeypatch.setenv("REDDIT_SUBREDDITS", "r/worldofwarcraft, competitivewow")
-    monkeypatch.setenv("REDDIT_DAILY_HOUR_UTC", "9")
+    monkeypatch.setenv("SOCIAL_DISCOVERY_HOURS_UTC", "8,18")
+    monkeypatch.setenv("GETXAPI_ENABLED", "true")
+    monkeypatch.setenv("GETXAPI_KEY", "x-secret")
 
     cfg = config.load()
 
     assert cfg.reddit_enabled is True
     assert cfg.reddit_api_key == "reddit-secret"
     assert cfg.reddit_subreddits == ("worldofwarcraft", "competitivewow")
-    assert cfg.reddit_daily_hour_utc == 9
+    assert cfg.social_discovery_hours_utc == (8, 18)
+    assert cfg.reddit_max_posts_per_run == 1
+    assert cfg.x_enabled is True
+    assert cfg.x_api_key == "x-secret"
+    assert cfg.x_max_posts_per_run == 1
 
 
 def test_enabled_reddit_topics_require_api_key(monkeypatch) -> None:
@@ -46,6 +52,17 @@ def test_enabled_reddit_topics_require_api_key(monkeypatch) -> None:
     monkeypatch.delenv("REDDITAPIS_KEY", raising=False)
 
     with pytest.raises(RuntimeError, match="REDDITAPIS_KEY"):
+        config.load()
+
+
+def test_enabled_x_topics_require_api_key(monkeypatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TARGET_CHANNEL", "channel")
+    monkeypatch.setenv("AI_PROVIDER", "app_server")
+    monkeypatch.setenv("GETXAPI_ENABLED", "true")
+    monkeypatch.delenv("GETXAPI_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="GETXAPI_KEY"):
         config.load()
 
 

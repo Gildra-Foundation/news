@@ -155,11 +155,7 @@ class AppServerContentAI:
         content_kind: str = "news",
     ) -> FilterResult | None:
         output = await self._complete(
-            (
-                gemini.REDDIT_TOPIC_PROMPT
-                if content_kind == "reddit_topic"
-                else gemini.FILTER_PROMPT
-            ) + _FILTER_JSON_SUFFIX,
+            gemini._filter_prompt(content_kind) + _FILTER_JSON_SUFFIX,
             {
                 "post": text[:12_000],
                 "recent_published": list(recent_posts),

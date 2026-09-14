@@ -10,7 +10,11 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, ValidationError
 
-from gildranews.adapters.ai.prompts import REDDIT_TOPIC_ANALYSIS_PROMPT, WOW_NEWS_ANALYSIS_PROMPT
+from gildranews.adapters.ai.prompts import (
+    REDDIT_TOPIC_ANALYSIS_PROMPT,
+    WOW_NEWS_ANALYSIS_PROMPT,
+    X_TOPIC_ANALYSIS_PROMPT,
+)
 from gildranews.domain.models import FilterResult, PublishedPostContext, Rewrite
 
 log = logging.getLogger(__name__)
@@ -97,6 +101,15 @@ BODY — 2–4 абзаца, между абзацами одна пустая �
 
 FILTER_PROMPT = WOW_NEWS_ANALYSIS_PROMPT + HASHTAG_INSTRUCTION
 REDDIT_TOPIC_PROMPT = REDDIT_TOPIC_ANALYSIS_PROMPT + HASHTAG_INSTRUCTION
+X_TOPIC_PROMPT = X_TOPIC_ANALYSIS_PROMPT + HASHTAG_INSTRUCTION
+
+
+def _filter_prompt(content_kind: str) -> str:
+    if content_kind == "reddit_topic":
+        return REDDIT_TOPIC_PROMPT
+    if content_kind == "x_topic":
+        return X_TOPIC_PROMPT
+    return FILTER_PROMPT
 
 
 # Pydantic-схемы для structured output Gemini
@@ -164,9 +177,7 @@ async def filter_and_rewrite(
             model=model,
             contents=json.dumps(payload, ensure_ascii=False),
             config=types.GenerateContentConfig(
-                system_instruction=(
-                    REDDIT_TOPIC_PROMPT if content_kind == "reddit_topic" else FILTER_PROMPT
-                ),
+                system_instruction=_filter_prompt(content_kind),
                 temperature=0.4,
                 max_output_tokens=4096,
                 response_mime_type="application/json",

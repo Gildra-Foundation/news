@@ -13,7 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.rendering import cards
-from gildranews.application import digest, process_reddit, process_rss
+from gildranews.application import digest, process_reddit, process_rss, process_x
 from gildranews.application.ports import ContentAI
 from gildranews.config import Config
 from gildranews.domain.models import ProcessResult
@@ -82,6 +82,21 @@ class ScheduledJobs:
             on_result=self._on_result,
         )
         log.info("Daily Reddit topics: %s", result)
+
+    async def run_x_pipeline(self) -> None:
+        result = await process_x.run_once(
+            bot=self._bot,
+            cfg=self._cfg,
+            content_ai=self._content_ai,
+            on_result=self._on_result,
+        )
+        log.info("Scheduled X topics: %s", result)
+
+    async def run_social_discovery(self) -> None:
+        if self._cfg.reddit_enabled:
+            await self.run_reddit_pipeline()
+        if self._cfg.x_enabled:
+            await self.run_x_pipeline()
 
     async def cleanup(self) -> None:
         try:
@@ -159,13 +174,13 @@ class ScheduledJobs:
                 max_instances=1,
                 coalesce=True,
             )
-            if self._cfg.reddit_enabled:
+            if self._cfg.reddit_enabled or self._cfg.x_enabled:
                 self._scheduler.add_job(
-                    self.run_reddit_pipeline,
+                    self.run_social_discovery,
                     trigger="cron",
-                    hour=self._cfg.reddit_daily_hour_utc,
+                    hour=",".join(map(str, self._cfg.social_discovery_hours_utc)),
                     minute=0,
-                    id="reddit_daily",
+                    id="social_discovery",
                     max_instances=1,
                     coalesce=True,
                 )

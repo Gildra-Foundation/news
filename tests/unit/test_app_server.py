@@ -193,3 +193,25 @@ async def test_luna_uses_reddit_editorial_policy_for_community_topics() -> None:
     assert "не выдавай мнение" in app_server.system.lower()
     assert "смысловым дублем" in app_server.system.lower()
     assert "не указывай reddit" in app_server.system.lower()
+
+
+@pytest.mark.asyncio
+async def test_luna_uses_x_editorial_policy_for_social_topics() -> None:
+    app_server = _StubAppServer(
+        {
+            "is_news": True,
+            "reason": "Полезное наблюдение игроков",
+            "title": "Игроки уточнили работу механики",
+            "body": "Наблюдение стоит учитывать перед прохождением подземелья.",
+            "hashtag": "обсуждения",
+        },
+    )
+    processor = AppServerContentAI(app_server)
+
+    result = await processor.filter_and_rewrite(
+        "One player's observation.", [], [], content_kind="x_topic",
+    )
+
+    assert result is not None
+    assert "не выдавай один пост" in app_server.system.lower()
+    assert "не указывай x" in app_server.system.lower()

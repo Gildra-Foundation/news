@@ -11,6 +11,10 @@ load_dotenv()
 
 DEFAULT_RSS_FEED_URL = "https://www.wowhead.com/news/rss/all"
 DEFAULT_REDDIT_SUBREDDITS = ("wow", "competitivewow", "wownoob")
+DEFAULT_X_SEARCH_QUERY = (
+    '"World of Warcraft" OR Warcraft lang:en min_faves:20 '
+    "-filter:replies -filter:retweets"
+)
 _SUBREDDIT_RE = re.compile(r"[A-Za-z0-9_]{2,32}\Z")
 
 
@@ -49,6 +53,17 @@ def _csv(key: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:
     if not raw:
         return default
     return tuple(value.strip() for value in raw.split(",") if value.strip())
+
+
+def _hours(key: str, default: tuple[int, ...]) -> tuple[int, ...]:
+    values = _csv(key, tuple(str(hour) for hour in default))
+    try:
+        hours = tuple(dict.fromkeys(int(value) for value in values))
+    except ValueError as exc:
+        raise RuntimeError(f"{key} должен содержать часы от 0 до 23") from exc
+    if not hours or len(hours) > 4 or any(not 0 <= hour <= 23 for hour in hours):
+        raise RuntimeError(f"{key} должен содержать от 1 до 4 часов от 0 до 23")
+    return hours
 
 
 def _secret(key: str, file_key: str, default_file: str) -> str:
@@ -95,9 +110,13 @@ class Config:
     reddit_enabled: bool = False
     reddit_api_key: str = ""
     reddit_subreddits: tuple[str, ...] = DEFAULT_REDDIT_SUBREDDITS
-    reddit_daily_hour_utc: int = 9
+    social_discovery_hours_utc: tuple[int, ...] = (8, 18)
     reddit_candidates_per_subreddit: int = 15
-    reddit_max_posts_per_day: int = 1
+    reddit_max_posts_per_run: int = 1
+    x_enabled: bool = False
+    x_api_key: str = ""
+    x_search_query: str = DEFAULT_X_SEARCH_QUERY
+    x_max_posts_per_run: int = 1
 
 def load() -> Config:
     target = _required("TARGET_CHANNEL")
@@ -138,6 +157,13 @@ def load() -> Config:
         raise RuntimeError("Для REDDITAPIS_ENABLED=true задайте REDDIT_SUBREDDITS")
     if any(not _SUBREDDIT_RE.fullmatch(value) for value in reddit_subreddits):
         raise RuntimeError("REDDIT_SUBREDDITS содержит некорректное имя сообщества")
+    x_enabled = _bool("GETXAPI_ENABLED")
+    x_api_key = os.getenv("GETXAPI_KEY", "").strip()
+    x_search_query = os.getenv("X_SEARCH_QUERY", DEFAULT_X_SEARCH_QUERY).strip()
+    if x_enabled and not x_api_key:
+        raise RuntimeError("Для GETXAPI_ENABLED=true задайте GETXAPI_KEY")
+    if not x_search_query or len(x_search_query) > 400:
+        raise RuntimeError("X_SEARCH_QUERY должен содержать от 1 до 400 символов")
     return Config(
         tg_api_id=tg_api_id,
         tg_api_hash=tg_api_hash,
@@ -177,13 +203,17 @@ def load() -> Config:
         reddit_enabled=reddit_enabled,
         reddit_api_key=reddit_api_key,
         reddit_subreddits=reddit_subreddits,
-        reddit_daily_hour_utc=_bounded_int(
-            "REDDIT_DAILY_HOUR_UTC", 9, minimum=0, maximum=23,
-        ),
+        social_discovery_hours_utc=_hours("SOCIAL_DISCOVERY_HOURS_UTC", (8, 18)),
         reddit_candidates_per_subreddit=_bounded_int(
             "REDDIT_CANDIDATES_PER_SUBREDDIT", 15, minimum=1, maximum=100,
         ),
-        reddit_max_posts_per_day=_bounded_int(
-            "REDDIT_MAX_POSTS_PER_DAY", 1, minimum=1, maximum=3,
+        reddit_max_posts_per_run=_bounded_int(
+            "REDDIT_MAX_POSTS_PER_RUN", 1, minimum=1, maximum=2,
+        ),
+        x_enabled=x_enabled,
+        x_api_key=x_api_key,
+        x_search_query=x_search_query,
+        x_max_posts_per_run=_bounded_int(
+            "X_MAX_POSTS_PER_RUN", 1, minimum=1, maximum=2,
         ),
     )

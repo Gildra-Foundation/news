@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from gildranews.config import Config
 from gildranews.jobs.scheduler import ScheduledJobs, find_orphan_screenshots
 
@@ -53,7 +55,7 @@ def test_start_skips_telegram_pipeline_without_reader() -> None:
     assert startup == ["run_rss_pipeline", "cleanup"]
 
 
-def test_start_schedules_reddit_topics_once_per_day() -> None:
+def test_start_schedules_reddit_and_x_topics_morning_and_evening() -> None:
     cfg = Config(
         tg_api_id=0,
         tg_api_hash="",
@@ -67,7 +69,9 @@ def test_start_schedules_reddit_topics_once_per_day() -> None:
         max_posts_per_run=3,
         reddit_enabled=True,
         reddit_api_key="secret",
-        reddit_daily_hour_utc=9,
+        x_enabled=True,
+        x_api_key="x-secret",
+        social_discovery_hours_utc=(8, 18),
     )
     jobs = ScheduledJobs(None, object(), cfg, object(), object())
     scheduled: list[dict] = []
@@ -84,7 +88,42 @@ def test_start_schedules_reddit_topics_once_per_day() -> None:
 
     jobs.start()
 
-    reddit_job = next(job for job in scheduled if job["id"] == "reddit_daily")
-    assert reddit_job["trigger"] == "cron"
-    assert reddit_job["hour"] == 9
-    assert reddit_job["minute"] == 0
+    discovery_job = next(job for job in scheduled if job["id"] == "social_discovery")
+    assert discovery_job["trigger"] == "cron"
+    assert discovery_job["hour"] == "8,18"
+    assert discovery_job["minute"] == 0
+
+
+@pytest.mark.asyncio
+async def test_social_discovery_runs_reddit_then_x() -> None:
+    cfg = Config(
+        tg_api_id=0,
+        tg_api_hash="",
+        bot_token="token",
+        target_channel="@channel",
+        admin_user_id=1,
+        gemini_api_key="",
+        gemini_model="model",
+        lookback_minutes=45,
+        interval_minutes=30,
+        max_posts_per_run=3,
+        reddit_enabled=True,
+        reddit_api_key="secret",
+        x_enabled=True,
+        x_api_key="x-secret",
+    )
+    jobs = ScheduledJobs(None, object(), cfg, object(), object())
+    calls: list[str] = []
+
+    async def reddit() -> None:
+        calls.append("reddit")
+
+    async def x() -> None:
+        calls.append("x")
+
+    jobs.run_reddit_pipeline = reddit
+    jobs.run_x_pipeline = x
+
+    await jobs.run_social_discovery()
+
+    assert calls == ["reddit", "x"]
