@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import io
+
 import httpx
 import pytest
+from PIL import Image
 
 from gildranews.adapters.media import download
 
@@ -57,3 +60,31 @@ async def test_download_rejects_empty_media(tmp_path) -> None:
         await client.aclose()
 
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_download_converts_webp_cover_to_telegram_photo(tmp_path) -> None:
+    buffer = io.BytesIO()
+    Image.new("RGB", (32, 24), "purple").save(buffer, format="WEBP")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"content-type": "image/webp"},
+            content=buffer.getvalue(),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await download(
+            "https://static.icy-veins.com/wp/raid.webp",
+            tmp_path,
+            kind="photo",
+            allowed_hosts={"static.icy-veins.com"},
+            http_client=client,
+        )
+
+    assert result.suffix == ".jpg"
+    assert result.is_file()
+    with Image.open(result) as image:
+        assert image.format == "JPEG"

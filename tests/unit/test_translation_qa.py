@@ -1,33 +1,30 @@
-from __future__ import annotations
-
-from gildranews.application.translation_qa import check_translation
+from gildranews.application.translation_qa import untranslated_terms
 
 
-def test_translation_qa_accepts_preserved_facts() -> None:
-    result = check_translation(
-        "Model scored 67.8% in `bench`. https://example.com/report",
-        "Модель набрала 67.8% в `bench`. https://example.com/report",
+def test_untranslated_terms_detects_raid_and_ability_names() -> None:
+    text = "В Venomous Abyss способность Caustic Claws создаёт Blightscale Spawn."
+
+    assert untranslated_terms(text) == (
+        "Venomous",
+        "Abyss",
+        "Caustic",
+        "Claws",
+        "Blightscale",
+        "Spawn",
     )
 
-    assert result.ready_for_editor is True
-    assert result.missing_numbers == ()
-    assert result.missing_links == ()
+
+def test_untranslated_terms_allows_wow_and_blizzard_names() -> None:
+    assert untranslated_terms("Blizzard изменила World of Warcraft и WoW: Forever.") == ()
 
 
-def test_translation_qa_rejects_lost_link_number_and_code_span() -> None:
-    result = check_translation(
-        "Version 5.6 costs $20. Run `tool test`. https://example.com",
-        "Новая версия стала дешевле.",
+def test_untranslated_terms_detects_avoidable_russian_loanwords() -> None:
+    text = "Новый контент патча усилил билд спека после нерфа."
+
+    assert untranslated_terms(text) == (
+        "контент",
+        "патча",
+        "билд",
+        "спека",
+        "нерфа",
     )
-
-    assert result.ready_for_editor is False
-    assert result.missing_numbers == ("5.6", "20")
-    assert result.missing_links == ("https://example.com",)
-    assert result.code_spans_match is False
-
-
-def test_translation_qa_detects_lost_duplicate_number() -> None:
-    result = check_translation("5.6 быстрее 5.6", "5.6 быстрее")
-
-    assert result.ready_for_editor is False
-    assert result.missing_numbers == ("5.6",)

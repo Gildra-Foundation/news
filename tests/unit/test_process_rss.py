@@ -7,7 +7,7 @@ import pytest
 from gildranews.adapters.sources.rss import RSSItem
 from gildranews.application import process_rss
 from gildranews.config import Config
-from gildranews.domain.models import FilterResult
+from gildranews.domain.models import FilterResult, InfographicFact, InfographicSpec
 
 
 class AcceptingNewsAI:
@@ -33,6 +33,24 @@ class AcceptingNewsAI:
 class FailingNewsAI:
     async def filter_and_rewrite(self, text, recent_posts, emoji_themes):
         raise RuntimeError("temporary outage")
+
+
+class RaidNewsAI:
+    async def filter_and_rewrite(self, text, recent_posts, emoji_themes):
+        return FilterResult(
+            is_news=True,
+            reason="Ослабление рейда",
+            title="Боссов рейда дополнительно ослабят",
+            body="Урон нескольких механик снизят.",
+            hashtag="новости",
+            infographic=InfographicSpec(
+                title="Ослабления боссов",
+                facts=(
+                    InfographicFact(value="25%", label="снижение"),
+                    InfographicFact(value="8", label="существ за волну"),
+                ),
+            ),
+        )
 
 
 @pytest.mark.asyncio
@@ -122,6 +140,79 @@ async def test_process_rss_item_publishes_without_source_attribution(monkeypatch
         "body": "Аддоны больше не смогут менять текстуру компаса внутри подземелий.",
         "target_message_id": 77,
     }
+
+
+@pytest.mark.asyncio
+async def test_icy_veins_uses_article_raid_cover_instead_of_infographic(
+    monkeypatch,
+) -> None:
+    published: dict = {}
+
+    async def claim_message(channel: str, message_id: int) -> bool:
+        return True
+
+    async def recent_context(hours: int, limit: int) -> list[dict[str, str]]:
+        return []
+
+    async def fetch_article_media(url):
+        assert url == "https://www.icy-veins.com/wow/news/raid-tuning/"
+        return (
+            "https://static.icy-veins.com/wp/venomousabyss-ulatek.webp",
+            "",
+        )
+
+    async def download(url, destination_dir, *, kind, allowed_hosts):
+        assert url.endswith("venomousabyss-ulatek.webp")
+        assert kind == "photo"
+        assert allowed_hosts == {"static.icy-veins.com"}
+        return destination_dir / "raid.webp"
+
+    async def publish(bot, target_channel: str, text: str, media_files=None) -> int:
+        published["media_files"] = media_files
+        return 88
+
+    async def record_published(*args, **kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(process_rss.db, "claim_message", claim_message)
+    monkeypatch.setattr(process_rss.db, "recent_published_context", recent_context)
+    monkeypatch.setattr(process_rss.db, "record_published", record_published)
+    monkeypatch.setattr(process_rss.emoji_store, "load", dict)
+    monkeypatch.setattr(process_rss.emoji_store, "themes_for_prompt", lambda _emap: [])
+    monkeypatch.setattr(process_rss.rss_source, "fetch_article_media", fetch_article_media)
+    monkeypatch.setattr(process_rss.media_downloader, "download", download)
+    monkeypatch.setattr(process_rss.tg_writer, "publish", publish)
+
+    cfg = Config(
+        tg_api_id=0,
+        tg_api_hash="",
+        bot_token="token",
+        target_channel="@gildrawow",
+        admin_user_id=1,
+        gemini_api_key="",
+        gemini_model="model",
+        lookback_minutes=120,
+        interval_minutes=30,
+        max_posts_per_run=3,
+    )
+    item = RSSItem(
+        source="icy-veins",
+        external_id=4328696118622736771,
+        title="Massive Venomous Abyss Raid Tuning",
+        content="Fragments reduced by 25%; eight spawns remain.",
+        published_at=datetime.now(UTC),
+        article_url="https://www.icy-veins.com/wow/news/raid-tuning/",
+    )
+
+    result = await process_rss.process_item(
+        bot=object(), cfg=cfg, item=item, content_ai=RaidNewsAI(),
+    )
+
+    assert result.status == "published"
+    assert len(published["media_files"]) == 1
+    media_path, media_kind = published["media_files"][0]
+    assert media_path.endswith("/raid.webp")
+    assert media_kind == "photo"
 
 
 @pytest.mark.asyncio

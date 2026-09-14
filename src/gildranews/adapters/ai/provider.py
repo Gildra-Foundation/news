@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, ValidationError
 from gildranews.adapters.ai import gemini
 from gildranews.adapters.ai.app_server import AppServerClient, AppServerError
 from gildranews.adapters.editor.manacost import EditorClient
-from gildranews.application.translation_qa import check_translation
+from gildranews.application.translation_qa import check_translation, untranslated_terms
 from gildranews.domain.models import (
     FilterResult,
     InfographicFact,
@@ -36,6 +36,19 @@ _FILTER_JSON_SUFFIX = """
 Верни только JSON без Markdown и пояснений:
 {"is_news":true,"reason":"...","title":"...","body":"...","emoji_theme":"...","hashtag":"...","infographic":null}
 infographic может быть объектом с полями kicker, title, facts (2–4 объектов value/label), source="". Каждое value должно дословно встречаться во входном post. Для отклонённой новости infographic=null. Не добавляй источник, URL или название издания в title/body.
+"""
+
+_RUSSIAN_REPAIR_PROMPT = """Ты — выпускающий редактор русскоязычного канала о World of Warcraft.
+
+Черновик уже основан на исходной статье. Исправь только язык title и body:
+— переведи по смыслу названия рейдов, способностей, эффектов и механик;
+— имена существ и персонажей без точного перевода запиши кириллицей;
+— не оставляй латиницу, кроме Blizzard, WoW, World of Warcraft и официального названия WoW: Forever;
+— замени ненужные заимствования: контент, патч, трансмог, бафф, нерф, билд, спек, ивент и левел — на точные русские слова;
+— сохрани без изменений все числа, версии, отрицания, статус события и причинно-следственные связи;
+— ничего не добавляй из памяти и не указывай источник.
+
+Верни только JSON без Markdown: {"title":"...","body":"...","hashtag":"..."}.
 """
 
 
@@ -170,6 +183,34 @@ class AppServerContentAI:
         rewrite = await self._finish_rewrite(text, output)
         if rewrite is None:
             return None
+        terms = untranslated_terms(f"{rewrite.title}\n{rewrite.body}")
+        if terms:
+            repaired_output = await self._complete(
+                _RUSSIAN_REPAIR_PROMPT,
+                {
+                    "source_text": text[:12_000],
+                    "draft_title": rewrite.title,
+                    "draft_body": rewrite.body,
+                    "untranslated_terms": list(terms),
+                },
+                _RewriteOutput,
+            )
+            if not isinstance(repaired_output, _RewriteOutput):
+                return None
+            repaired = await self._finish_rewrite(
+                f"{rewrite.title}\n\n{rewrite.body}",
+                repaired_output,
+                verify_translation=True,
+            )
+            if repaired is None or untranslated_terms(f"{repaired.title}\n{repaired.body}"):
+                log.warning("Russian terminology repair did not remove Latin terms")
+                return None
+            rewrite = Rewrite(
+                title=repaired.title,
+                body=repaired.body,
+                hashtag=repaired.hashtag or rewrite.hashtag,
+                infographic=rewrite.infographic,
+            )
         return FilterResult(
             is_news=True,
             reason=output.reason.strip(),

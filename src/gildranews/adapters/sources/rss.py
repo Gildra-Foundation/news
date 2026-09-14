@@ -14,6 +14,7 @@ import httpx
 MAX_FEED_BYTES = 2 * 1024 * 1024
 MAX_ARTICLE_BYTES = 3 * 1024 * 1024
 MAX_ITEMS = 80
+SUPPORTED_ARTICLE_SOURCES = frozenset({"wowhead", "icy-veins"})
 _CONTENT_TAG = "{http://purl.org/rss/1.0/modules/content/}encoded"
 _MEDIA_TAG = "{http://search.yahoo.com/mrss/}content"
 _ARTICLE_ID_RE = re.compile(r"(?:news=|/news/)(\d+)")
@@ -225,8 +226,9 @@ async def fetch_article_media(
     *,
     http_client: httpx.AsyncClient | None = None,
 ) -> tuple[str, str]:
-    if source_key(url) != "wowhead":
-        raise ValueError("Статья должна находиться на Wowhead")
+    expected_source = source_key(url)
+    if expected_source not in SUPPORTED_ARTICLE_SOURCES:
+        raise ValueError("Неподдерживаемый источник статьи")
     owns_client = http_client is None
     client = http_client or httpx.AsyncClient(
         timeout=30,
@@ -236,8 +238,8 @@ async def fetch_article_media(
     try:
         async with client.stream("GET", url) as response:
             response.raise_for_status()
-            if source_key(str(response.url)) != "wowhead":
-                raise ValueError("Перенаправление статьи за пределы Wowhead")
+            if source_key(str(response.url)) != expected_source:
+                raise ValueError("Перенаправление статьи за пределы источника")
             chunks: list[bytes] = []
             size = 0
             async for chunk in response.aiter_bytes():

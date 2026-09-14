@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import httpx
 import pytest
 
 from gildranews.adapters.sources.rss import (
     MAX_FEED_BYTES,
     extract_article_media,
+    fetch_article_media,
     parse_feed,
     source_key,
 )
@@ -97,3 +99,28 @@ def test_extract_article_media_finds_cover_and_direct_video() -> None:
         "https://wow.zamimg.com/cover.jpg",
         "https://wow.zamimg.com/clip.mp4",
     )
+
+
+@pytest.mark.asyncio
+async def test_fetch_article_media_accepts_icy_veins_raid_cover() -> None:
+    article_url = "https://www.icy-veins.com/wow/news/raid-tuning/"
+    cover_url = "https://static.icy-veins.com/wp/venomousabyss-ulatek.webp"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == article_url
+        return httpx.Response(
+            200,
+            request=request,
+            content=(
+                f'<meta property="og:image" content="{cover_url}">'
+            ).encode(),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        image_url, video_url = await fetch_article_media(
+            article_url,
+            http_client=client,
+        )
+
+    assert image_url == cover_url
+    assert video_url == ""

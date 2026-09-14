@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Set as AbstractSet
 from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
+from PIL import Image
 
 PHOTO_LIMIT_BYTES = 10 * 1024 * 1024
 VIDEO_LIMIT_BYTES = 48 * 1024 * 1024
 _MEDIA_TYPES = {
-    "photo": {"image/jpeg": ".jpg", "image/png": ".png"},
+    "photo": {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"},
     "video": {"video/mp4": ".mp4"},
 }
 
@@ -20,6 +22,14 @@ def _validated_url(url: str, allowed_hosts: AbstractSet[str]) -> str:
     if parsed.scheme != "https" or hostname not in allowed_hosts:
         raise ValueError("Недопустимый домен медиа")
     return parsed.geturl()
+
+
+def _webp_to_jpeg(source: Path) -> Path:
+    destination = source.with_suffix(".jpg")
+    with Image.open(source) as image:
+        image.convert("RGB").save(destination, format="JPEG", quality=92, optimize=True)
+    source.unlink()
+    return destination
 
 
 async def download(
@@ -64,6 +74,8 @@ async def download(
                     output.write(chunk)
             if size == 0:
                 raise ValueError("Пустой медиафайл")
+        if kind == "photo" and output_path.suffix == ".webp":
+            output_path = await asyncio.to_thread(_webp_to_jpeg, output_path)
         return output_path
     except Exception:
         if output_path is not None:

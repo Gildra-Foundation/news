@@ -21,7 +21,10 @@ from gildranews.domain.models import ProcessResult
 
 log = logging.getLogger(__name__)
 MAX_AI_INPUT_CHARS = 12_000
-WOWHEAD_MEDIA_HOSTS = {"wow.zamimg.com"}
+RSS_MEDIA_HOSTS = {
+    "wowhead": {"wow.zamimg.com"},
+    "icy-veins": {"static.icy-veins.com"},
+}
 ResultCallback = Callable[[ProcessResult], Awaitable[None]]
 
 
@@ -89,7 +92,8 @@ async def process_item(
         with tempfile.TemporaryDirectory(prefix="gildranews_rss_") as tmpdir:
             media: list[tuple[str, str]] = []
             media_dir = Path(tmpdir)
-            if item.source == "wowhead":
+            allowed_media_hosts = RSS_MEDIA_HOSTS.get(item.source)
+            if allowed_media_hosts:
                 image_url = item.image_url
                 video_url = item.video_url
                 if item.article_url and (not image_url or not video_url):
@@ -117,7 +121,7 @@ async def process_item(
                             media_url,
                             media_dir,
                             kind=kind,
-                            allowed_hosts=WOWHEAD_MEDIA_HOSTS,
+                            allowed_hosts=allowed_media_hosts,
                         )
                         media.append((str(source_path), kind))
                     except Exception:
@@ -128,7 +132,7 @@ async def process_item(
                             kind,
                             exc_info=True,
                         )
-            if analysis.infographic is not None:
+            if not media and analysis.infographic is not None:
                 infographic_path = media_dir / "infographic.png"
                 rendered = await asyncio.to_thread(
                     render_png, analysis.infographic, infographic_path,

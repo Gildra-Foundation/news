@@ -84,6 +84,17 @@ class _StubAppServer:
         return None
 
 
+class _SequenceAppServer(_StubAppServer):
+    def __init__(self, responses: list[dict]) -> None:
+        super().__init__(responses[0])
+        self.responses = iter(responses)
+
+    async def complete(self, system: str, user: str) -> str:
+        self.system = system
+        self.user = user
+        return json.dumps(next(self.responses), ensure_ascii=False)
+
+
 @pytest.mark.asyncio
 async def test_luna_translation_is_rejected_when_a_number_is_lost() -> None:
     processor = AppServerContentAI(
@@ -170,6 +181,37 @@ async def test_luna_news_analysis_uses_full_wow_context_and_hides_source() -> No
     assert "World of Warcraft" in app_server.system
     assert "карта фактов" in app_server.system.lower()
     assert "не указывай источник" in app_server.system.lower()
+
+
+@pytest.mark.asyncio
+async def test_luna_repairs_untranslated_raid_terms_before_publication() -> None:
+    app_server = _SequenceAppServer(
+        [
+            {
+                "is_news": True,
+                "reason": "Ослабление рейда",
+                "title": "В Venomous Abyss ослабят механики",
+                "body": "У Sszorak способность Caustic Claws больше не создаёт Caustic Residue.",
+                "hashtag": "новости",
+            },
+            {
+                "title": "В Ядовитой Бездне ослабят механики",
+                "body": "У Сзорака едкие когти больше не оставляют едкие лужи.",
+                "hashtag": "новости",
+            },
+        ],
+    )
+    processor = AppServerContentAI(app_server)
+
+    result = await processor.filter_and_rewrite(
+        "In Venomous Abyss, Sszorak's Caustic Claws no longer creates Caustic Residue.",
+        [],
+        [],
+    )
+
+    assert result is not None
+    assert result.title == "В Ядовитой Бездне ослабят механики"
+    assert result.body == "У Сзорака едкие когти больше не оставляют едкие лужи."
 
 
 @pytest.mark.asyncio
