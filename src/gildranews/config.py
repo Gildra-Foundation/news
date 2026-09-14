@@ -20,6 +20,17 @@ def _int(key: str, default: int) -> int:
     return int(raw) if raw else default
 
 
+def _bool(key: str, default: bool = False) -> bool:
+    raw = os.getenv(key, "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{key} должен быть true или false")
+
+
 @dataclass(frozen=True)
 class Config:
     tg_api_id: int
@@ -32,6 +43,7 @@ class Config:
     lookback_minutes: int
     interval_minutes: int
     max_posts_per_run: int
+    telegram_reader_enabled: bool = False
     ai_provider: str = "app_server"
     app_server_url: str = "http://agent-codex:4202/ag-ui"
     app_server_token: str = ""
@@ -40,12 +52,6 @@ class Config:
     ai_timeout_seconds: int = 240
     editor_url: str = "http://editor-gateway:8080/v2/edit"
     editor_token: str = ""
-
-    @property
-    def telegram_reader_enabled(self) -> bool:
-        """Whether the optional Telethon source reader is configured."""
-        return bool(self.tg_api_id and self.tg_api_hash)
-
 
 def load() -> Config:
     target = _required("TARGET_CHANNEL")
@@ -62,9 +68,16 @@ def load() -> Config:
     ).strip()
     if ai_provider == "app_server" and not app_server_url:
         raise RuntimeError("Для AI_PROVIDER=app_server необходимо задать APP_SERVER_URL")
+    tg_api_id = _int("TG_API_ID", 0)
+    tg_api_hash = os.getenv("TG_API_HASH", "").strip()
+    telegram_reader_enabled = _bool("TELEGRAM_READER_ENABLED")
+    if telegram_reader_enabled and not (tg_api_id and tg_api_hash):
+        raise RuntimeError(
+            "Для TELEGRAM_READER_ENABLED=true задайте TG_API_ID и TG_API_HASH"
+        )
     return Config(
-        tg_api_id=_int("TG_API_ID", 0),
-        tg_api_hash=os.getenv("TG_API_HASH", "").strip(),
+        tg_api_id=tg_api_id,
+        tg_api_hash=tg_api_hash,
         bot_token=_required("BOT_TOKEN"),
         target_channel=target,
         admin_user_id=_int("ADMIN_USER_ID", 0),
@@ -73,6 +86,7 @@ def load() -> Config:
         lookback_minutes=_int("LOOKBACK_MINUTES", 45),
         interval_minutes=_int("INTERVAL_MINUTES", 30),
         max_posts_per_run=_int("MAX_POSTS_PER_RUN", 3),
+        telegram_reader_enabled=telegram_reader_enabled,
         ai_provider=ai_provider,
         app_server_url=app_server_url,
         app_server_token=os.getenv("APP_SERVER_TOKEN", "").strip(),

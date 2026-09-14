@@ -137,7 +137,8 @@ cp .env.example .env
 
 | Поле | Где взять |
 |---|---|
-| `TG_API_ID`, `TG_API_HASH` | Опционально: только для чтения чужих Telegram-каналов |
+| `TELEGRAM_READER_ENABLED` | `false` для RSS/web; `true` включает Telethon-reader |
+| `TG_API_ID`, `TG_API_HASH` | Нужны только при `TELEGRAM_READER_ENABLED=true` |
 | `BOT_TOKEN` | [@BotFather](https://t.me/BotFather) → /newbot |
 | `TARGET_CHANNEL` | `@название_канала` — бот должен быть **админом** |
 | `ADMIN_USER_ID` | узнаете на шаге 4 |

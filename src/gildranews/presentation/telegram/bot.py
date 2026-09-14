@@ -95,21 +95,30 @@ async def run_bot() -> None:
         else:
             session_path = f"{telegram_reader.SESSION_NAME}.session"
             if os.path.exists(session_path):
-                tele_client = telegram_reader.make_client(cfg.tg_api_id, cfg.tg_api_hash)
-                await tele_client.start()
-                me = await tele_client.get_me()
-                log.info("Telethon авторизован как %s (id=%s)", me.first_name, me.id)
-                tg_reader = telegram_reader
-                pipeline = telegram_pipeline
+                candidate = telegram_reader.make_client(cfg.tg_api_id, cfg.tg_api_hash)
+                await candidate.connect()
+                if await candidate.is_user_authorized():
+                    tele_client = candidate
+                    me = await tele_client.get_me()
+                    log.info("Telethon авторизован как %s (id=%s)", me.first_name, me.id)
+                    tg_reader = telegram_reader
+                    pipeline = telegram_pipeline
 
-                await db.seed_sources(INITIAL_SOURCES)
-                sources = await db.list_sources()
-                for src in sources:
-                    await tg_reader.ensure_joined(tele_client, src)
+                    await db.seed_sources(INITIAL_SOURCES)
+                    sources = await db.list_sources()
+                    for src in sources:
+                        await tg_reader.ensure_joined(tele_client, src)
 
-                register_realtime_handler(
-                    tele_client, bot, cfg, _notify_admin, content_ai,
-                )
+                    register_realtime_handler(
+                        tele_client, bot, cfg, _notify_admin, content_ai,
+                    )
+                else:
+                    await candidate.disconnect()
+                    log.warning(
+                        "%s не авторизован; интерактивный вход отключён в сервисе. "
+                        "Бот продолжит работу только с Bot API.",
+                        session_path,
+                    )
             else:
                 log.warning(
                     "Telethon настроен, но %s не найден; "
