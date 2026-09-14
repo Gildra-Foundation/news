@@ -72,8 +72,12 @@ async def test_client_sends_luna_model_and_internal_token_header() -> None:
 class _StubAppServer:
     def __init__(self, response: dict) -> None:
         self.response = response
+        self.system = ""
+        self.user = ""
 
     async def complete(self, system: str, user: str) -> str:
+        self.system = system
+        self.user = user
         return json.dumps(self.response, ensure_ascii=False)
 
     async def aclose(self) -> None:
@@ -121,3 +125,29 @@ async def test_luna_filter_keeps_only_source_backed_infographic() -> None:
     assert result is not None
     assert result.infographic is not None
     assert [fact.value for fact in result.infographic.facts] == ["40%", "5.6"]
+    assert result.infographic.source == ""
+
+
+@pytest.mark.asyncio
+async def test_luna_news_analysis_uses_full_wow_context_and_hides_source() -> None:
+    app_server = _StubAppServer(
+        {
+            "is_news": True,
+            "reason": "Важный хотфикс",
+            "title": "Blizzard меняет механику миникарты",
+            "body": "Хотфикс ограничит подсказки аддонов внутри подземелий.",
+            "hashtag": "новости",
+        },
+    )
+    processor = AppServerContentAI(app_server)
+    source_text = "World of Warcraft " + ("x" * 5_000) + " final fact"
+
+    result = await processor.filter_and_rewrite(source_text, [], [])
+
+    payload = json.loads(app_server.user)
+    assert result is not None
+    assert len(payload["post"]) > 3_000
+    assert "final fact" in payload["post"]
+    assert "World of Warcraft" in app_server.system
+    assert "карта фактов" in app_server.system.lower()
+    assert "не указывай источник" in app_server.system.lower()

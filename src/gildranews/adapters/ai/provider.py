@@ -21,15 +21,15 @@ log = logging.getLogger(__name__)
 _JSON_SUFFIX = """
 
 Верни только JSON без Markdown и пояснений. Допустимая структура:
-{"title":"...","body":"...","hashtag":"новости","infographic":{"kicker":"...","title":"...","facts":[{"value":"точное значение из источника","label":"краткая подпись"}],"source":"домен или название источника"}}
-Поле infographic необязательно. Добавляй его только при наличии 2–4 точных числовых фактов; value обязан дословно встречаться во входном source_text/post. Не добавляй фактов от себя.
+{"title":"...","body":"...","hashtag":"новости","infographic":{"kicker":"...","title":"...","facts":[{"value":"точное значение из входного текста","label":"краткая подпись"}],"source":""}}
+Поле infographic необязательно. Добавляй его только при наличии 2–4 точных числовых фактов; value обязан дословно встречаться во входном source_text/post. Не добавляй фактов от себя. Поле source всегда оставляй пустым.
 """
 
 _FILTER_JSON_SUFFIX = """
 
 Верни только JSON без Markdown и пояснений:
 {"is_news":true,"reason":"...","title":"...","body":"...","emoji_theme":"...","hashtag":"...","infographic":null}
-infographic может быть объектом с полями kicker, title, facts (2–4 объектов value/label), source. Каждое value должно дословно встречаться во входном post. Для отклонённой новости infographic=null.
+infographic может быть объектом с полями kicker, title, facts (2–4 объектов value/label), source="". Каждое value должно дословно встречаться во входном post. Для отклонённой новости infographic=null. Не добавляй источник, URL или название издания в title/body.
 """
 
 
@@ -90,7 +90,7 @@ def _infographic(value: _InfographicOutput | None, source: str) -> InfographicSp
             InfographicFact(value=fact.value.strip(), label=fact.label.strip())
             for fact in value.facts
         ),
-        source=value.source.strip(),
+        source="",
     )
 
 
@@ -150,7 +150,7 @@ class AppServerContentAI:
         output = await self._complete(
             gemini.FILTER_PROMPT + _FILTER_JSON_SUFFIX,
             {
-                "post": text[:3000],
+                "post": text[:12_000],
                 "recent_published": list(recent_titles),
                 "available_emoji_themes": list(emoji_themes),
             },
