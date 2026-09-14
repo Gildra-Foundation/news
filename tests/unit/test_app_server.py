@@ -157,6 +157,10 @@ async def test_luna_news_analysis_uses_full_wow_context_and_hides_source() -> No
     assert "final fact" in payload["post"]
     assert payload["recent_published"] == recent_posts
     assert "без новых существенных фактов" in app_server.system.lower()
+    assert "tier set" in app_server.system.lower()
+    assert "классовый комплект" in app_server.system.lower()
+    assert "off-piece" in app_server.system.lower()
+    assert "смена внешнего вида" in app_server.system.lower()
     assert "World of Warcraft" in app_server.system
     assert "карта фактов" in app_server.system.lower()
     assert "не указывай источник" in app_server.system.lower()

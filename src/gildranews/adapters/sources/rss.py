@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import httpx
 
 MAX_FEED_BYTES = 2 * 1024 * 1024
+MAX_ARTICLE_BYTES = 3 * 1024 * 1024
 MAX_ITEMS = 80
 _CONTENT_TAG = "{http://purl.org/rss/1.0/modules/content/}encoded"
 _MEDIA_TAG = "{http://search.yahoo.com/mrss/}content"
@@ -45,6 +46,33 @@ class _HTMLText(HTMLParser):
             self.parts.append(data)
 
 
+class _HTMLMedia(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.image_url = ""
+        self.video_url = ""
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        attributes = {key.lower(): value for key, value in attrs if value is not None}
+        if tag == "meta":
+            property_name = attributes.get("property", attributes.get("name", "")).lower()
+            content = _http_url(attributes.get("content"))
+            if not self.image_url and property_name in {"og:image", "twitter:image"}:
+                self.image_url = content
+            elif not self.video_url and property_name in {
+                "og:video",
+                "og:video:url",
+                "og:video:secure_url",
+            }:
+                self.video_url = content
+        elif tag == "video" and not self.video_url:
+            self.video_url = _http_url(attributes.get("src"))
+        elif tag == "source" and not self.video_url:
+            media_type = attributes.get("type", "").lower()
+            if media_type == "video/mp4":
+                self.video_url = _http_url(attributes.get("src"))
+
+
 @dataclass(frozen=True, slots=True)
 class RSSItem:
     source: str
@@ -54,6 +82,7 @@ class RSSItem:
     published_at: datetime
     article_url: str = ""
     image_url: str = ""
+    video_url: str = ""
 
     @property
     def ai_text(self) -> str:
@@ -102,6 +131,18 @@ def source_key(url: str) -> str:
     return f"rss:{host}" if host else "rss"
 
 
+def extract_article_media(document: bytes) -> tuple[str, str]:
+    if len(document) > MAX_ARTICLE_BYTES:
+        raise ValueError("HTML-документ статьи слишком большой")
+    parser = _HTMLMedia()
+    try:
+        parser.feed(document.decode("utf-8", errors="strict"))
+        parser.close()
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ValueError("Некорректный HTML статьи") from exc
+    return parser.image_url, parser.video_url
+
+
 def parse_feed(document: bytes, *, source: str) -> list[RSSItem]:
     if len(document) > MAX_FEED_BYTES:
         raise ValueError("RSS-документ слишком большой")
@@ -118,8 +159,18 @@ def parse_feed(document: bytes, *, source: str) -> list[RSSItem]:
         published_at = _published_at(element.findtext("pubDate", default=""))
         encoded = element.findtext(_CONTENT_TAG, default="")
         content = _plain_text(encoded or element.findtext("description", default=""))
-        media = element.find(_MEDIA_TAG)
-        image_url = _http_url(media.get("url", "")) if media is not None else ""
+        image_url = ""
+        video_url = ""
+        for media in element.findall(_MEDIA_TAG):
+            media_url = _http_url(media.get("url", ""))
+            medium = media.get("medium", "").lower()
+            media_type = media.get("type", "").lower()
+            if not media_url:
+                continue
+            if not image_url and (medium == "image" or media_type.startswith("image/")):
+                image_url = media_url
+            elif not video_url and (medium == "video" or media_type == "video/mp4"):
+                video_url = media_url
         if not (title and content and published_at and (guid or link)):
             continue
         items.append(
@@ -131,6 +182,7 @@ def parse_feed(document: bytes, *, source: str) -> list[RSSItem]:
                 published_at=published_at,
                 article_url=link,
                 image_url=image_url,
+                video_url=video_url,
             )
         )
     return items
@@ -161,6 +213,37 @@ async def fetch_feed(
                     raise ValueError("RSS-документ слишком большой")
                 chunks.append(chunk)
         return parse_feed(b"".join(chunks), source=source)
+    finally:
+        if owns_client:
+            await client.aclose()
+
+
+async def fetch_article_media(
+    url: str,
+    *,
+    http_client: httpx.AsyncClient | None = None,
+) -> tuple[str, str]:
+    if source_key(url) != "wowhead":
+        raise ValueError("Статья должна находиться на Wowhead")
+    owns_client = http_client is None
+    client = http_client or httpx.AsyncClient(
+        timeout=30,
+        follow_redirects=True,
+        headers={"User-Agent": "GildraNews/0.1 article reader"},
+    )
+    try:
+        async with client.stream("GET", url) as response:
+            response.raise_for_status()
+            if source_key(str(response.url)) != "wowhead":
+                raise ValueError("Перенаправление статьи за пределы Wowhead")
+            chunks: list[bytes] = []
+            size = 0
+            async for chunk in response.aiter_bytes():
+                size += len(chunk)
+                if size > MAX_ARTICLE_BYTES:
+                    raise ValueError("HTML-документ статьи слишком большой")
+                chunks.append(chunk)
+        return extract_article_media(b"".join(chunks))
     finally:
         if owns_client:
             await client.aclose()

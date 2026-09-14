@@ -9,6 +9,7 @@ from pathlib import Path
 
 from aiogram import Bot
 
+from gildranews.adapters import media as media_downloader
 from gildranews.adapters.emoji import catalog as emoji_store
 from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.publishing import telegram as tg_writer
@@ -20,6 +21,7 @@ from gildranews.domain.models import ProcessResult
 
 log = logging.getLogger(__name__)
 MAX_AI_INPUT_CHARS = 12_000
+WOWHEAD_MEDIA_HOSTS = {"wow.zamimg.com"}
 ResultCallback = Callable[[ProcessResult], Awaitable[None]]
 
 
@@ -82,8 +84,48 @@ async def process_item(
     try:
         with tempfile.TemporaryDirectory(prefix="gildranews_rss_") as tmpdir:
             media: list[tuple[str, str]] = []
+            media_dir = Path(tmpdir)
+            if item.source == "wowhead":
+                image_url = item.image_url
+                video_url = item.video_url
+                if item.article_url and (not image_url or not video_url):
+                    try:
+                        discovered_image, discovered_video = (
+                            await rss_source.fetch_article_media(item.article_url)
+                        )
+                        image_url = image_url or discovered_image
+                        video_url = video_url or discovered_video
+                    except Exception:
+                        log.warning(
+                            "RSS article media discovery failed for %s/%s",
+                            item.source,
+                            item.external_id,
+                            exc_info=True,
+                        )
+                for media_url, kind in (
+                    (image_url, "photo"),
+                    (video_url, "video"),
+                ):
+                    if not media_url:
+                        continue
+                    try:
+                        source_path = await media_downloader.download(
+                            media_url,
+                            media_dir,
+                            kind=kind,
+                            allowed_hosts=WOWHEAD_MEDIA_HOSTS,
+                        )
+                        media.append((str(source_path), kind))
+                    except Exception:
+                        log.warning(
+                            "RSS media download failed for %s/%s (%s)",
+                            item.source,
+                            item.external_id,
+                            kind,
+                            exc_info=True,
+                        )
             if analysis.infographic is not None:
-                infographic_path = Path(tmpdir) / "infographic.png"
+                infographic_path = media_dir / "infographic.png"
                 rendered = await asyncio.to_thread(
                     render_png, analysis.infographic, infographic_path,
                 )

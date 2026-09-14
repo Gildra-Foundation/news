@@ -4,7 +4,11 @@ from datetime import UTC, datetime
 
 import pytest
 
-from gildranews.adapters.sources.rss import MAX_FEED_BYTES, parse_feed
+from gildranews.adapters.sources.rss import (
+    MAX_FEED_BYTES,
+    extract_article_media,
+    parse_feed,
+)
 
 WOWHEAD_FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
 <rss xmlns:content="http://purl.org/rss/1.0/modules/content/"
@@ -17,6 +21,7 @@ WOWHEAD_FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
       <guid isPermaLink="false">https://www.wowhead.com/news=382863</guid>
       <pubDate>Mon, 14 Sep 2026 10:22:47 -0500</pubDate>
       <media:content url="https://wow.zamimg.com/image.jpg" medium="image" />
+      <media:content url="https://wow.zamimg.com/clip.mp4" medium="video" type="video/mp4" />
       <content:encoded><![CDATA[
         Blizzard will disable <b>custom minimap assets</b> in a hotfix.
         <p>Addons will no longer call <code>SetSVG</code> on the compass.</p>
@@ -38,6 +43,7 @@ def test_parse_wowhead_feed_normalizes_article_for_ai() -> None:
     assert item.title == "Minimap Addon Tech Will Be Disabled"
     assert item.published_at == datetime(2026, 9, 14, 15, 22, 47, tzinfo=UTC)
     assert item.image_url == "https://wow.zamimg.com/image.jpg"
+    assert item.video_url == "https://wow.zamimg.com/clip.mp4"
     assert "custom minimap assets" in item.content
     assert "SetSVG" in item.content
     assert "https://" not in item.ai_text
@@ -47,3 +53,17 @@ def test_parse_wowhead_feed_normalizes_article_for_ai() -> None:
 def test_parse_feed_rejects_oversized_document() -> None:
     with pytest.raises(ValueError, match="слишком большой"):
         parse_feed(b"x" * (MAX_FEED_BYTES + 1), source="wowhead")
+
+
+def test_extract_article_media_finds_cover_and_direct_video() -> None:
+    html = b"""
+    <html><head>
+      <meta property="og:image" content="https://wow.zamimg.com/cover.jpg">
+      <meta property="og:video" content="https://wow.zamimg.com/clip.mp4">
+    </head><body></body></html>
+    """
+
+    assert extract_article_media(html) == (
+        "https://wow.zamimg.com/cover.jpg",
+        "https://wow.zamimg.com/clip.mp4",
+    )

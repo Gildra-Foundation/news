@@ -58,6 +58,14 @@ async def test_process_rss_item_publishes_without_source_attribution(monkeypatch
         published.update(text=text, media_files=media_files, target_channel=target_channel)
         return 77
 
+    async def download(url, destination_dir, *, kind, allowed_hosts):
+        assert allowed_hosts == {"wow.zamimg.com"}
+        return destination_dir / ("source.jpg" if kind == "photo" else "source.mp4")
+
+    async def fetch_article_media(url):
+        assert url == "https://www.wowhead.com/news=382863/example"
+        return "https://wow.zamimg.com/image.jpg", "https://wow.zamimg.com/clip.mp4"
+
     async def record_published(channel, message_id, title, body, target_message_id) -> None:
         recorded.update(
             channel=channel,
@@ -73,6 +81,8 @@ async def test_process_rss_item_publishes_without_source_attribution(monkeypatch
     monkeypatch.setattr(process_rss.emoji_store, "load", dict)
     monkeypatch.setattr(process_rss.emoji_store, "themes_for_prompt", lambda _emap: [])
     monkeypatch.setattr(process_rss.tg_writer, "publish", publish)
+    monkeypatch.setattr(process_rss.media_downloader, "download", download)
+    monkeypatch.setattr(process_rss.rss_source, "fetch_article_media", fetch_article_media)
 
     cfg = Config(
         tg_api_id=0,
@@ -93,6 +103,7 @@ async def test_process_rss_item_publishes_without_source_attribution(monkeypatch
         content="Blizzard will disable custom minimap assets.",
         published_at=datetime.now(UTC),
         article_url="https://www.wowhead.com/news=382863/example",
+        image_url="https://wow.zamimg.com/image.jpg",
     )
 
     result = await process_rss.process_item(
@@ -103,6 +114,7 @@ async def test_process_rss_item_publishes_without_source_attribution(monkeypatch
     assert published["target_channel"] == "@gildrawow"
     assert "wowhead" not in published["text"].lower()
     assert "https://" not in published["text"]
+    assert [kind for _path, kind in published["media_files"]] == ["photo", "video"]
     assert recorded == {
         "channel": "wowhead",
         "message_id": 382863,
