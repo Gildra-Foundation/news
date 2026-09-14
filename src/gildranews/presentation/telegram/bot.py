@@ -28,13 +28,10 @@ from gildranews.adapters.ai.provider import build_content_ai
 from gildranews.adapters.emoji import catalog as emoji_store
 from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.publishing import telegram as tg_writer
-from gildranews.adapters.sources import telegram as tg_reader
 from gildranews.application import digest as digest_mod
-from gildranews.application import process_news as pipeline
 from gildranews.jobs.scheduler import ScheduledJobs
 from gildranews.presentation.telegram import drafts
 from gildranews.presentation.telegram.notifications import format_status, notify_admin
-from gildranews.presentation.telegram.realtime import register_realtime_handler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -74,33 +71,53 @@ async def run_bot() -> None:
     cfg = config.load()
     os.makedirs("data", exist_ok=True)
     await db.init()
-    await db.seed_sources(INITIAL_SOURCES)
-
-    if not os.path.exists(f"{tg_reader.SESSION_NAME}.session"):
-        log.error(
-            "Не найден файл сессии Telethon (%s.session). "
-            "Запустите сначала: docker compose run --rm newsbot "
-            "python -m gildranews.init_session",
-            tg_reader.SESSION_NAME,
-        )
-        return
-
-    tele_client = tg_reader.make_client(cfg.tg_api_id, cfg.tg_api_hash)
-    await tele_client.start()
-    me = await tele_client.get_me()
-    log.info("Telethon авторизован как %s (id=%s)", me.first_name, me.id)
 
     bot = tg_writer.make_bot(cfg.bot_token)
     dp = tg_writer.make_dispatcher(cfg.admin_user_id, cfg.target_channel)
     content_ai = build_content_ai(cfg)
-
-    # Автоподписка на источники, чтобы NewMessage events приходили
-    sources = await db.list_sources()
-    for src in sources:
-        await tg_reader.ensure_joined(tele_client, src)
-
     _notify_admin = partial(notify_admin, bot, cfg)
-    register_realtime_handler(tele_client, bot, cfg, _notify_admin, content_ai)
+
+    tele_client = None
+    tg_reader = None
+    pipeline = None
+    if cfg.telegram_reader_enabled:
+        try:
+            from gildranews.adapters.sources import telegram as telegram_reader
+            from gildranews.application import process_news as telegram_pipeline
+            from gildranews.presentation.telegram.realtime import register_realtime_handler
+        except ModuleNotFoundError as exc:
+            if exc.name != "telethon":
+                raise
+            log.warning(
+                "Telethon не установлен; бот запущен только с Bot API. "
+                "Для чтения Telegram-каналов установите Telethon."
+            )
+        else:
+            session_path = f"{telegram_reader.SESSION_NAME}.session"
+            if os.path.exists(session_path):
+                tele_client = telegram_reader.make_client(cfg.tg_api_id, cfg.tg_api_hash)
+                await tele_client.start()
+                me = await tele_client.get_me()
+                log.info("Telethon авторизован как %s (id=%s)", me.first_name, me.id)
+                tg_reader = telegram_reader
+                pipeline = telegram_pipeline
+
+                await db.seed_sources(INITIAL_SOURCES)
+                sources = await db.list_sources()
+                for src in sources:
+                    await tg_reader.ensure_joined(tele_client, src)
+
+                register_realtime_handler(
+                    tele_client, bot, cfg, _notify_admin, content_ai,
+                )
+            else:
+                log.warning(
+                    "Telethon настроен, но %s не найден; "
+                    "бот запущен только с Bot API без чтения Telegram-каналов.",
+                    session_path,
+                )
+    else:
+        log.info("Telethon отключён: бот работает с RSS/web-источниками и Bot API")
 
     # ------- Команды бота -------
     def _is_admin(message: Message) -> bool:
@@ -111,6 +128,12 @@ async def run_bot() -> None:
     @dp.message(Command("run"))
     async def cmd_run(message: Message) -> None:
         if not _is_admin(message):
+            return
+        if tele_client is None or pipeline is None:
+            await message.answer(
+                "Telegram-reader отключён. Используйте RSS/web-источники "
+                "или пришлите поддерживаемую внешнюю ссылку."
+            )
             return
         await message.answer("Запускаю прогон…")
         result = await pipeline.run_once(
@@ -144,6 +167,12 @@ async def run_bot() -> None:
     @dp.message(Command("test"))
     async def cmd_test(message: Message) -> None:
         if not _is_admin(message):
+            return
+        if tele_client is None or tg_reader is None:
+            await message.answer(
+                "Telegram-reader отключён: команда /test для чужих "
+                "Telegram-каналов недоступна."
+            )
             return
         parts = (message.text or "").split(maxsplit=1)
         src_list = await db.list_sources()
@@ -216,6 +245,12 @@ async def run_bot() -> None:
     @dp.message(F.text.regexp(LINK_RE))
     async def cmd_link(message: Message) -> None:
         if not _is_admin(message):
+            return
+        if tele_client is None or tg_reader is None or pipeline is None:
+            await message.answer(
+                "Telegram-reader отключён: ссылки на посты чужих "
+                "Telegram-каналов не обрабатываются."
+            )
             return
         m = LINK_RE.search(message.text or "")
         if not m:
@@ -604,6 +639,11 @@ async def run_bot() -> None:
     async def cmd_add_with_join(message: Message) -> None:
         if not _is_admin(message):
             return
+        if tele_client is None or tg_reader is None:
+            await message.answer(
+                "Telegram-reader отключён. Добавление Telegram-каналов недоступно."
+            )
+            return
         parts = (message.text or "").split(maxsplit=1)
         if len(parts) < 2:
             await message.answer("Использование: <code>/add @channel</code>")
@@ -631,7 +671,8 @@ async def run_bot() -> None:
         await jobs.stop()
         # Закрываем всё, что держит ресурсы/сокеты
         try:
-            await tele_client.disconnect()
+            if tele_client is not None:
+                await tele_client.disconnect()
         except Exception:
             log.warning("Telethon disconnect raised", exc_info=True)
         try:

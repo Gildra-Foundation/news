@@ -19,6 +19,10 @@ from gildranews.config import load
 
 async def main() -> None:
     cfg = load()
+    if not cfg.telegram_reader_enabled:
+        raise RuntimeError(
+            "Для режима чтения Telegram-каналов задайте TG_API_ID и TG_API_HASH"
+        )
     os.makedirs("data", exist_ok=True)
     client = TelegramClient(SESSION_NAME, cfg.tg_api_id, cfg.tg_api_hash)
     await client.start()

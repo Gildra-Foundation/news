@@ -5,18 +5,21 @@ import logging
 import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from telethon import TelegramClient
 
 from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.rendering import cards
-from gildranews.application import digest, process_news
+from gildranews.application import digest
 from gildranews.application.ports import ContentAI
 from gildranews.config import Config
 from gildranews.domain.models import ProcessResult
+
+if TYPE_CHECKING:
+    from telethon import TelegramClient
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +39,7 @@ def find_orphan_screenshots(directory: Path, active_draft_ids: set[int]) -> list
 class ScheduledJobs:
     def __init__(
         self,
-        client: TelegramClient,
+        client: TelegramClient | None,
         bot: Bot,
         cfg: Config,
         on_result: ResultCallback,
@@ -51,6 +54,10 @@ class ScheduledJobs:
         self._startup_tasks: set[asyncio.Task] = set()
 
     async def run_pipeline(self) -> None:
+        if self._client is None:
+            return
+        from gildranews.application import process_news
+
         await process_news.run_once(
             self._client,
             self._bot,
@@ -99,14 +106,15 @@ class ScheduledJobs:
 
     def start(self) -> None:
         if self._cfg.interval_minutes > 0:
-            self._scheduler.add_job(
-                self.run_pipeline,
-                trigger="interval",
-                minutes=self._cfg.interval_minutes,
-                id="news_pipeline",
-                max_instances=1,
-                coalesce=True,
-            )
+            if self._client is not None:
+                self._scheduler.add_job(
+                    self.run_pipeline,
+                    trigger="interval",
+                    minutes=self._cfg.interval_minutes,
+                    id="news_pipeline",
+                    max_instances=1,
+                    coalesce=True,
+                )
             self._scheduler.add_job(
                 self.cleanup,
                 trigger="interval",
@@ -126,13 +134,20 @@ class ScheduledJobs:
                 coalesce=True,
             )
             self._scheduler.start()
-            log.info(
-                "Safety-net поллинг каждые %d мин, cleanup раз в сутки, "
-                "дайджест по воскресеньям 18:00 UTC",
-                self._cfg.interval_minutes,
-            )
+            if self._client is not None:
+                log.info(
+                    "Safety-net поллинг каждые %d мин, cleanup раз в сутки, "
+                    "дайджест по воскресеньям 18:00 UTC",
+                    self._cfg.interval_minutes,
+                )
+            else:
+                log.info(
+                    "Telegram-reader отключён; cleanup раз в сутки, "
+                    "дайджест по воскресеньям 18:00 UTC",
+                )
 
-        self._start_task(self.run_pipeline())
+        if self._client is not None:
+            self._start_task(self.run_pipeline())
         self._start_task(self.cleanup())
 
     def _start_task(self, coroutine) -> None:

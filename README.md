@@ -137,7 +137,7 @@ cp .env.example .env
 
 | Поле | Где взять |
 |---|---|
-| `TG_API_ID`, `TG_API_HASH` | https://my.telegram.org → API development tools |
+| `TG_API_ID`, `TG_API_HASH` | Опционально: только для чтения чужих Telegram-каналов |
 | `BOT_TOKEN` | [@BotFather](https://t.me/BotFather) → /newbot |
 | `TARGET_CHANNEL` | `@название_канала` — бот должен быть **админом** |
 | `ADMIN_USER_ID` | узнаете на шаге 4 |

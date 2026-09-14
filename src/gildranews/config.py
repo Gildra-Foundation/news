@@ -41,6 +41,11 @@ class Config:
     editor_url: str = "http://editor-gateway:8080/v2/edit"
     editor_token: str = ""
 
+    @property
+    def telegram_reader_enabled(self) -> bool:
+        """Whether the optional Telethon source reader is configured."""
+        return bool(self.tg_api_id and self.tg_api_hash)
+
 
 def load() -> Config:
     target = _required("TARGET_CHANNEL")
@@ -58,8 +63,8 @@ def load() -> Config:
     if ai_provider == "app_server" and not app_server_url:
         raise RuntimeError("Для AI_PROVIDER=app_server необходимо задать APP_SERVER_URL")
     return Config(
-        tg_api_id=int(_required("TG_API_ID")),
-        tg_api_hash=_required("TG_API_HASH"),
+        tg_api_id=_int("TG_API_ID", 0),
+        tg_api_hash=os.getenv("TG_API_HASH", "").strip(),
         bot_token=_required("BOT_TOKEN"),
         target_channel=target,
         admin_user_id=_int("ADMIN_USER_ID", 0),
