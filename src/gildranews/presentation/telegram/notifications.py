@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import logging
 
 from aiogram import Bot
@@ -41,16 +42,20 @@ def format_status(result: ProcessResult) -> str:
 
 
 def _html_escape(value: str) -> str:
-    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return html.escape(value)
 
 
 def format_admin_notice(result: ProcessResult) -> str:
     emoji, label = _status_parts(result)
-    link = f"https://t.me/{result.channel}/{result.message_id}"
-    lines = [
-        f"{emoji} <b>{label}</b>",
-        f'<a href="{link}">@{result.channel}/{result.message_id}</a>',
-    ]
+    if result.source_url:
+        source_line = (
+            f'<a href="{html.escape(result.source_url, quote=True)}">'
+            "Исходная новость</a>"
+        )
+    else:
+        link = f"https://t.me/{result.channel}/{result.message_id}"
+        source_line = f'<a href="{link}">@{result.channel}/{result.message_id}</a>'
+    lines = [f"{emoji} <b>{label}</b>", source_line]
     if result.title:
         lines.append(f"\n📌 {_html_escape(result.title)}")
     if result.reason:

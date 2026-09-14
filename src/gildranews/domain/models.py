@@ -55,3 +55,4 @@ class ProcessResult:
     message_id: int
     reason: str = ""
     title: str = ""
+    source_url: str = ""

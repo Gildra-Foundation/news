@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import tempfile
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from aiogram import Bot
@@ -11,24 +13,27 @@ from gildranews.adapters.emoji import catalog as emoji_store
 from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.publishing import telegram as tg_writer
 from gildranews.adapters.rendering.svg_infographic import render_png
-from gildranews.adapters.sources.rss import RSSItem
+from gildranews.adapters.sources import rss as rss_source
 from gildranews.application.ports import ContentAI
 from gildranews.config import Config
 from gildranews.domain.models import ProcessResult
 
 log = logging.getLogger(__name__)
 MAX_AI_INPUT_CHARS = 12_000
+ResultCallback = Callable[[ProcessResult], Awaitable[None]]
 
 
 async def process_item(
     *,
     bot: Bot,
     cfg: Config,
-    item: RSSItem,
+    item: rss_source.RSSItem,
     content_ai: ContentAI,
 ) -> ProcessResult:
     if not await db.claim_message(item.source, item.external_id):
-        return ProcessResult("duplicate", item.source, item.external_id)
+        return ProcessResult(
+            "duplicate", item.source, item.external_id, source_url=item.article_url,
+        )
 
     recent_titles = await db.recent_published_titles(hours=48, limit=100)
     emoji_map = emoji_store.load()
@@ -44,6 +49,7 @@ async def process_item(
         return ProcessResult(
             "ai_error", item.source, item.external_id,
             reason=f"{type(exc).__name__}: {exc}",
+            source_url=item.article_url,
         )
 
     if analysis is None:
@@ -51,10 +57,12 @@ async def process_item(
         return ProcessResult(
             "ai_error", item.source, item.external_id,
             reason="AI-сервис не вернул валидный ответ",
+            source_url=item.article_url,
         )
     if not analysis.is_news:
         return ProcessResult(
-            "filtered", item.source, item.external_id, reason=analysis.reason,
+            "filtered", item.source, item.external_id,
+            reason=analysis.reason, source_url=item.article_url,
         )
 
     emoji_theme = emoji_store.detect_override(
@@ -87,6 +95,7 @@ async def process_item(
         return ProcessResult(
             "error", item.source, item.external_id,
             reason=f"{type(exc).__name__}: {exc}", title=analysis.title,
+            source_url=item.article_url,
         )
 
     if target_message_id is None:
@@ -94,6 +103,7 @@ async def process_item(
         return ProcessResult(
             "publish_failed", item.source, item.external_id,
             reason="Telegram API отказал в публикации", title=analysis.title,
+            source_url=item.article_url,
         )
     await db.record_published(
         item.source,
@@ -105,4 +115,59 @@ async def process_item(
     return ProcessResult(
         "published", item.source, item.external_id,
         reason=analysis.reason, title=analysis.title,
+        source_url=item.article_url,
     )
+
+
+async def run_once(
+    *,
+    bot: Bot,
+    cfg: Config,
+    content_ai: ContentAI,
+    on_result: ResultCallback | None = None,
+    now: datetime | None = None,
+) -> dict[str, int | str | None]:
+    current_time = (now or datetime.now(UTC)).astimezone(UTC)
+    cutoff = current_time - timedelta(minutes=cfg.lookback_minutes)
+    candidates: list[rss_source.RSSItem] = []
+    errors: list[str] = []
+
+    for feed_url in cfg.rss_feed_urls:
+        source = rss_source.source_key(feed_url)
+        try:
+            feed_items = await rss_source.fetch_feed(feed_url, source=source)
+        except Exception as exc:
+            log.exception("RSS fetch failed for %s", source)
+            errors.append(f"{source}: {type(exc).__name__}")
+            continue
+        candidates.extend(
+            item for item in feed_items
+            if cutoff <= item.published_at <= current_time
+        )
+
+    candidates.sort(key=lambda item: item.published_at)
+    selected = 0
+    published = 0
+    for item in candidates:
+        if published >= cfg.max_posts_per_run:
+            break
+        result = await process_item(
+            bot=bot, cfg=cfg, item=item, content_ai=content_ai,
+        )
+        if result.status == "published":
+            selected += 1
+            published += 1
+        if on_result is not None and result.status != "duplicate":
+            try:
+                await on_result(result)
+            except Exception:
+                log.exception("RSS on_result callback failed")
+
+    error = "; ".join(errors) or None
+    await db.record_run(len(candidates), selected, published, error)
+    return {
+        "fetched": len(candidates),
+        "selected": selected,
+        "published": published,
+        "error": error,
+    }

@@ -144,6 +144,8 @@ cp .env.example .env
 | `ADMIN_USER_ID` | узнаете на шаге 4 |
 | `GEMINI_API_KEY` | https://aistudio.google.com/apikey |
 | `GEMINI_MODEL` | `gemini-3.1-flash-lite` (быстро/бесплатно) или `gemini-2.5-pro` |
+| `RSS_ENABLED` | `true` включает автономный RSS-поллинг |
+| `RSS_FEED_URLS` | RSS-ленты через запятую; по умолчанию Wowhead |
 
 ### 3. Авторизация Telethon (один раз)
 

@@ -95,6 +95,13 @@ def _http_url(value: str | None) -> str:
     return normalized if parsed.scheme in {"http", "https"} and parsed.netloc else ""
 
 
+def source_key(url: str) -> str:
+    host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+    if host == "wowhead.com" or host.endswith(".wowhead.com"):
+        return "wowhead"
+    return f"rss:{host}" if host else "rss"
+
+
 def parse_feed(document: bytes, *, source: str) -> list[RSSItem]:
     if len(document) > MAX_FEED_BYTES:
         raise ValueError("RSS-документ слишком большой")

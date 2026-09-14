@@ -13,7 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.rendering import cards
-from gildranews.application import digest
+from gildranews.application import digest, process_rss
 from gildranews.application.ports import ContentAI
 from gildranews.config import Config
 from gildranews.domain.models import ProcessResult
@@ -66,6 +66,14 @@ class ScheduledJobs:
             news_filter=self._content_ai,
         )
 
+    async def run_rss_pipeline(self) -> None:
+        await process_rss.run_once(
+            bot=self._bot,
+            cfg=self._cfg,
+            content_ai=self._content_ai,
+            on_result=self._on_result,
+        )
+
     async def cleanup(self) -> None:
         try:
             stats = await db.cleanup_old_data()
@@ -106,6 +114,15 @@ class ScheduledJobs:
 
     def start(self) -> None:
         if self._cfg.interval_minutes > 0:
+            if self._cfg.rss_enabled:
+                self._scheduler.add_job(
+                    self.run_rss_pipeline,
+                    trigger="interval",
+                    minutes=self._cfg.interval_minutes,
+                    id="rss_pipeline",
+                    max_instances=1,
+                    coalesce=True,
+                )
             if self._client is not None:
                 self._scheduler.add_job(
                     self.run_pipeline,
@@ -140,12 +157,14 @@ class ScheduledJobs:
                     "дайджест по воскресеньям 18:00 UTC",
                     self._cfg.interval_minutes,
                 )
-            else:
+            elif not self._cfg.rss_enabled:
                 log.info(
                     "Telegram-reader отключён; cleanup раз в сутки, "
                     "дайджест по воскресеньям 18:00 UTC",
                 )
 
+        if self._cfg.rss_enabled:
+            self._start_task(self.run_rss_pipeline())
         if self._client is not None:
             self._start_task(self.run_pipeline())
         self._start_task(self.cleanup())

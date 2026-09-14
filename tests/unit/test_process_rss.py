@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -145,3 +145,63 @@ async def test_process_rss_item_releases_claim_when_ai_is_temporarily_unavailabl
 
     assert result.status == "ai_error"
     assert released == [("wowhead", 382863)]
+
+
+@pytest.mark.asyncio
+async def test_run_once_processes_only_items_inside_lookback(monkeypatch) -> None:
+    now = datetime(2026, 9, 14, 16, 0, tzinfo=UTC)
+    recent = RSSItem(
+        source="wowhead",
+        external_id=2,
+        title="Recent",
+        content="Recent article body",
+        published_at=now - timedelta(minutes=10),
+    )
+    old = RSSItem(
+        source="wowhead",
+        external_id=1,
+        title="Old",
+        content="Old article body",
+        published_at=now - timedelta(hours=4),
+    )
+    processed: list[int] = []
+    runs: list[tuple[int, int, int, str | None]] = []
+
+    async def fetch_feed(url: str, *, source: str):
+        assert url == "https://www.wowhead.com/news/rss/all"
+        assert source == "wowhead"
+        return [recent, old]
+
+    async def process_item(**kwargs):
+        processed.append(kwargs["item"].external_id)
+        return process_rss.ProcessResult(
+            "published", "wowhead", kwargs["item"].external_id,
+        )
+
+    async def record_run(fetched, selected, published, error) -> None:
+        runs.append((fetched, selected, published, error))
+
+    monkeypatch.setattr(process_rss.rss_source, "fetch_feed", fetch_feed)
+    monkeypatch.setattr(process_rss, "process_item", process_item)
+    monkeypatch.setattr(process_rss.db, "record_run", record_run)
+
+    cfg = Config(
+        tg_api_id=0,
+        tg_api_hash="",
+        bot_token="token",
+        target_channel="@gildrawow",
+        admin_user_id=1,
+        gemini_api_key="",
+        gemini_model="model",
+        lookback_minutes=45,
+        interval_minutes=30,
+        max_posts_per_run=3,
+    )
+
+    result = await process_rss.run_once(
+        bot=object(), cfg=cfg, content_ai=object(), now=now,
+    )
+
+    assert processed == [2]
+    assert result == {"fetched": 1, "selected": 1, "published": 1, "error": None}
+    assert runs == [(1, 1, 1, None)]

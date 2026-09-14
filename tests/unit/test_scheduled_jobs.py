@@ -49,5 +49,5 @@ def test_start_skips_telegram_pipeline_without_reader() -> None:
     jobs.start()
 
     assert "news_pipeline" not in scheduled
-    assert scheduled == ["db_cleanup", "weekly_digest"]
-    assert startup == ["cleanup"]
+    assert scheduled == ["rss_pipeline", "db_cleanup", "weekly_digest"]
+    assert startup == ["run_rss_pipeline", "cleanup"]

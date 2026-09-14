@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+DEFAULT_RSS_FEED_URL = "https://www.wowhead.com/news/rss/all"
+
 
 def _required(key: str) -> str:
     val = os.getenv(key, "").strip()
@@ -31,6 +33,13 @@ def _bool(key: str, default: bool = False) -> bool:
     raise RuntimeError(f"{key} должен быть true или false")
 
 
+def _csv(key: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:
+    raw = os.getenv(key, "").strip()
+    if not raw:
+        return default
+    return tuple(value.strip() for value in raw.split(",") if value.strip())
+
+
 @dataclass(frozen=True)
 class Config:
     tg_api_id: int
@@ -44,6 +53,8 @@ class Config:
     interval_minutes: int
     max_posts_per_run: int
     telegram_reader_enabled: bool = False
+    rss_enabled: bool = True
+    rss_feed_urls: tuple[str, ...] = (DEFAULT_RSS_FEED_URL,)
     ai_provider: str = "app_server"
     app_server_url: str = "http://agent-codex:4202/ag-ui"
     app_server_token: str = ""
@@ -75,6 +86,10 @@ def load() -> Config:
         raise RuntimeError(
             "Для TELEGRAM_READER_ENABLED=true задайте TG_API_ID и TG_API_HASH"
         )
+    rss_enabled = _bool("RSS_ENABLED", True)
+    rss_feed_urls = _csv("RSS_FEED_URLS", (DEFAULT_RSS_FEED_URL,))
+    if rss_enabled and not rss_feed_urls:
+        raise RuntimeError("Для RSS_ENABLED=true задайте хотя бы один RSS_FEED_URLS")
     return Config(
         tg_api_id=tg_api_id,
         tg_api_hash=tg_api_hash,
@@ -87,6 +102,8 @@ def load() -> Config:
         interval_minutes=_int("INTERVAL_MINUTES", 30),
         max_posts_per_run=_int("MAX_POSTS_PER_RUN", 3),
         telegram_reader_enabled=telegram_reader_enabled,
+        rss_enabled=rss_enabled,
+        rss_feed_urls=rss_feed_urls,
         ai_provider=ai_provider,
         app_server_url=app_server_url,
         app_server_token=os.getenv("APP_SERVER_TOKEN", "").strip(),
