@@ -13,15 +13,16 @@ import os
 
 from telethon import TelegramClient
 
-from gildranews.adapters.sources.telegram import SESSION_NAME
+from gildranews.adapters.publishing.mtproto import SESSION_NAME
 from gildranews.config import load
 
 
 async def main() -> None:
     cfg = load()
-    if not cfg.telegram_reader_enabled:
+    if not (cfg.telegram_reader_enabled or cfg.mtproto_publisher_enabled):
         raise RuntimeError(
-            "Для режима чтения Telegram-каналов задайте TG_API_ID и TG_API_HASH"
+            "Для MTProto задайте MTPROTO_PUBLISHER_ENABLED=true либо "
+            "TELEGRAM_READER_ENABLED=true"
         )
     os.makedirs("data", exist_ok=True)
     client = TelegramClient(SESSION_NAME, cfg.tg_api_id, cfg.tg_api_hash)

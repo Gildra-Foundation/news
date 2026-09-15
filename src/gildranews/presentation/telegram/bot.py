@@ -78,41 +78,32 @@ async def run_bot() -> None:
     content_ai = build_content_ai(cfg)
     _notify_admin = partial(notify_admin, bot, cfg)
 
+    mtproto_client = None
     tele_client = None
     tg_reader = None
     pipeline = None
-    if cfg.telegram_reader_enabled:
+    if cfg.telegram_reader_enabled or cfg.mtproto_publisher_enabled:
         try:
-            from gildranews.adapters.sources import telegram as telegram_reader
-            from gildranews.application import process_news as telegram_pipeline
-            from gildranews.presentation.telegram.realtime import register_realtime_handler
+            from gildranews.adapters.publishing import mtproto as mtproto_writer
         except ModuleNotFoundError as exc:
             if exc.name != "telethon":
                 raise
             log.warning(
                 "Telethon не установлен; бот запущен только с Bot API. "
-                "Для чтения Telegram-каналов установите Telethon."
+                "Для MTProto-публикации установите Telethon."
             )
         else:
-            session_path = f"{telegram_reader.SESSION_NAME}.session"
+            session_path = f"{mtproto_writer.SESSION_NAME}.session"
             if os.path.exists(session_path):
-                candidate = telegram_reader.make_client(cfg.tg_api_id, cfg.tg_api_hash)
+                candidate = mtproto_writer.make_client(cfg.tg_api_id, cfg.tg_api_hash)
                 await candidate.connect()
                 if await candidate.is_user_authorized():
-                    tele_client = candidate
-                    me = await tele_client.get_me()
-                    log.info("Telethon авторизован как %s (id=%s)", me.first_name, me.id)
-                    tg_reader = telegram_reader
-                    pipeline = telegram_pipeline
-
-                    await db.seed_sources(INITIAL_SOURCES)
-                    sources = await db.list_sources()
-                    for src in sources:
-                        await tg_reader.ensure_joined(tele_client, src)
-
-                    register_realtime_handler(
-                        tele_client, bot, cfg, _notify_admin, content_ai,
-                    )
+                    mtproto_client = candidate
+                    me = await mtproto_client.get_me()
+                    log.info("MTProto авторизован как %s (id=%s)", me.first_name, me.id)
+                    if cfg.mtproto_publisher_enabled:
+                        tg_writer.configure_mtproto_publisher(mtproto_client)
+                        log.info("MTProto включён только как транспорт публикации")
                 else:
                     await candidate.disconnect()
                     log.warning(
@@ -126,8 +117,26 @@ async def run_bot() -> None:
                     "бот запущен только с Bot API без чтения Telegram-каналов.",
                     session_path,
                 )
+
+    if cfg.telegram_reader_enabled and mtproto_client is not None:
+        from gildranews.adapters.sources import telegram as telegram_reader
+        from gildranews.application import process_news as telegram_pipeline
+        from gildranews.presentation.telegram.realtime import register_realtime_handler
+
+        tele_client = mtproto_client
+        tg_reader = telegram_reader
+        pipeline = telegram_pipeline
+        await db.seed_sources(INITIAL_SOURCES)
+        sources = await db.list_sources()
+        for src in sources:
+            await tg_reader.ensure_joined(tele_client, src)
+        register_realtime_handler(
+            tele_client, bot, cfg, _notify_admin, content_ai,
+        )
+    elif cfg.telegram_reader_enabled:
+        log.warning("Telegram-reader включён, но MTProto-сессия недоступна")
     else:
-        log.info("Telethon отключён: бот работает с RSS/web-источниками и Bot API")
+        log.info("Telegram-reader отключён: чужие Telegram-каналы не читаются")
 
     # ------- Команды бота -------
     def _is_admin(message: Message) -> bool:
@@ -745,8 +754,8 @@ async def run_bot() -> None:
         await jobs.stop()
         # Закрываем всё, что держит ресурсы/сокеты
         try:
-            if tele_client is not None:
-                await tele_client.disconnect()
+            if mtproto_client is not None:
+                await mtproto_client.disconnect()
         except Exception:
             log.warning("Telethon disconnect raised", exc_info=True)
         try:

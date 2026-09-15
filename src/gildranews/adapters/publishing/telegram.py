@@ -12,8 +12,11 @@ from aiogram.enums import MessageEntityType, ParseMode
 from aiogram.exceptions import TelegramAPIError, TelegramRetryAfter
 from aiogram.filters import Command, CommandStart
 from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo, Message
+from telethon import TelegramClient
+from telethon.errors import RPCError
 
 from gildranews.adapters.persistence import sqlite as db
+from gildranews.adapters.publishing import mtproto
 from gildranews.domain.models import TelegramEmojiAsset
 
 log = logging.getLogger(__name__)
@@ -44,6 +47,12 @@ _CUSTOM_EMOJI_RE = re.compile(
     r'<tg-emoji\s+emoji-id="[0-9]+">(.*?)</tg-emoji>',
     re.DOTALL,
 )
+_mtproto_client: TelegramClient | None = None
+
+
+def configure_mtproto_publisher(client: TelegramClient | None) -> None:
+    global _mtproto_client
+    _mtproto_client = client
 
 
 def _is_admin(message: Message, admin_id: int) -> bool:
@@ -402,6 +411,32 @@ async def publish(
     import asyncio as _asyncio
 
     current_text = text
+    if _mtproto_client is not None:
+        try:
+            message_id = await mtproto.publish(
+                _mtproto_client, target_channel, current_text, media_files,
+            )
+            if _CUSTOM_EMOJI_RE.search(current_text):
+                try:
+                    await db.set_service_state("fragment_integration", "healthy", "")
+                except Exception:
+                    log.warning("Could not persist MTProto health", exc_info=True)
+            return message_id
+        except RPCError as error:
+            log.warning(
+                "MTProto rejected publication (%s); falling back to Bot API",
+                type(error).__name__,
+            )
+            if _CUSTOM_EMOJI_RE.search(current_text):
+                current_text = without_custom_emojis(current_text)
+                try:
+                    await db.set_service_state(
+                        "fragment_integration",
+                        "faulty",
+                        f"MTProto rejected publication: {type(error).__name__}",
+                    )
+                except Exception:
+                    log.warning("Could not persist MTProto failure", exc_info=True)
     rate_retried = False
     emoji_retried = False
     for attempt in range(3):

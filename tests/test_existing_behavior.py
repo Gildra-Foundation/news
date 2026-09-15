@@ -148,6 +148,47 @@ async def test_publish_marks_fragment_faulty_when_telegram_silently_removes_enti
     ]
 
 
+@pytest.mark.asyncio
+async def test_publish_prefers_configured_mtproto_transport(monkeypatch) -> None:
+    calls: list[tuple[object, str, str, object]] = []
+    states: list[tuple[str, str]] = []
+    client = object()
+
+    async def publish_mtproto(active_client, channel, text, media_files=None):
+        calls.append((active_client, channel, text, media_files))
+        return 93
+
+    async def set_state(key: str, value: str, detail: str = "") -> None:
+        states.append((key, value))
+
+    class Bot:
+        async def send_message(self, **kwargs):
+            raise AssertionError("Bot API must not be used when MTProto succeeds")
+
+    monkeypatch.setattr(tg_writer.mtproto, "publish", publish_mtproto)
+    monkeypatch.setattr(tg_writer.db, "set_service_state", set_state)
+    tg_writer.configure_mtproto_publisher(client)
+    try:
+        result = await tg_writer.publish(
+            Bot(),
+            "@channel",
+            '<tg-emoji emoji-id="123">⚔️</tg-emoji> <b>Заголовок</b>',
+        )
+    finally:
+        tg_writer.configure_mtproto_publisher(None)
+
+    assert result == 93
+    assert calls == [
+        (
+            client,
+            "@channel",
+            '<tg-emoji emoji-id="123">⚔️</tg-emoji> <b>Заголовок</b>',
+            None,
+        )
+    ]
+    assert states == [("fragment_integration", "healthy")]
+
+
 def test_emoji_override_ignores_invalid_patterns_and_finds_valid_match() -> None:
     emoji_map = {
         "broken": {"id": "1", "fallback": "?", "match_pattern": "["},
