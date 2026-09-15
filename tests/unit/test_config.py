@@ -11,6 +11,7 @@ def test_load_allows_bot_api_mode_without_telethon_credentials(monkeypatch) -> N
     monkeypatch.setenv("AI_PROVIDER", "app_server")
     monkeypatch.delenv("TG_API_ID", raising=False)
     monkeypatch.delenv("TG_API_HASH", raising=False)
+    monkeypatch.delenv("EMOJI_AUTOCREATE_ENABLED", raising=False)
 
     cfg = config.load()
 

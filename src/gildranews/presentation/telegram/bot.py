@@ -451,6 +451,8 @@ async def run_bot() -> None:
         media = drafts.photo_argument(draft["image_url"])
         media_type = draft.get("media_type") or "photo"
         target_msg_id: int | None = None
+        requested_custom_emoji = tg_writer.without_custom_emojis(text) != text
+        used_unicode_fallback = False
 
         async def _send_draft(formatted_text: str):
             if media:
@@ -476,6 +478,7 @@ async def run_bot() -> None:
                 try:
                     sent = await _send_draft(fallback_text)
                     target_msg_id = sent.message_id
+                    used_unicode_fallback = True
                 except TelegramAPIError as fallback_error:
                     log.exception("publish from draft failed without Custom Emoji")
                     await callback.answer(
@@ -486,6 +489,17 @@ async def run_bot() -> None:
                 log.exception("publish from draft failed")
                 await callback.answer(f"Ошибка: {e}", show_alert=True)
                 return
+
+        if requested_custom_emoji:
+            try:
+                delivered = not used_unicode_fallback and tg_writer.message_has_custom_emoji(sent)
+                await db.set_service_state(
+                    "fragment_integration",
+                    "healthy" if delivered else "faulty",
+                    "" if delivered else "Telegram did not preserve Custom Emoji",
+                )
+            except Exception:
+                log.warning("Could not persist Fragment health", exc_info=True)
 
         # Зафиксировать в published_posts для дедупа и дайджеста
         await db.record_published(

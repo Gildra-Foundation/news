@@ -3,6 +3,7 @@
 *.session-journal
 newsbot.db
 data/
+backups/
 __pycache__/
 *.pyc
 .venv/

@@ -117,6 +117,37 @@ async def test_publish_retries_without_custom_emoji_when_telegram_rejects_it(
     assert states == [("fragment_integration", "faulty")]
 
 
+@pytest.mark.asyncio
+async def test_publish_marks_fragment_faulty_when_telegram_silently_removes_entity(
+    monkeypatch,
+) -> None:
+    states: list[tuple[str, str, str]] = []
+
+    async def set_state(key: str, value: str, detail: str = "") -> None:
+        states.append((key, value, detail))
+
+    class Bot:
+        async def send_message(self, **kwargs):
+            return SimpleNamespace(message_id=92, entities=[], caption_entities=[])
+
+    monkeypatch.setattr(tg_writer.db, "set_service_state", set_state)
+
+    result = await tg_writer.publish(
+        Bot(),
+        "@channel",
+        '<tg-emoji emoji-id="123">⚔️</tg-emoji> <b>Заголовок</b>',
+    )
+
+    assert result == 92
+    assert states == [
+        (
+            "fragment_integration",
+            "faulty",
+            "Telegram accepted the post but removed Custom Emoji",
+        )
+    ]
+
+
 def test_emoji_override_ignores_invalid_patterns_and_finds_valid_match() -> None:
     emoji_map = {
         "broken": {"id": "1", "fallback": "?", "match_pattern": "["},

@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
+from aiogram.enums import MessageEntityType, ParseMode
 from aiogram.exceptions import TelegramAPIError, TelegramRetryAfter
 from aiogram.filters import Command, CommandStart
 from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo, Message
@@ -348,16 +348,15 @@ async def _publish_once(
     target_channel: str,
     text: str,
     media_files: list[tuple[str, str]] | None,
-) -> int | None:
-    """Сам запрос в Telegram. Возвращает message_id опубликованного поста (для ссылок),
-    или None если не удалось определить. TelegramAPIError проходит наверх — caller решит retry."""
+) -> tuple[int | None, bool]:
+    """Return the message id and whether Telegram preserved a Custom Emoji entity."""
     if not media_files:
         msg = await bot.send_message(
             chat_id=target_channel,
             text=text,
             disable_web_page_preview=True,
         )
-        return msg.message_id
+        return msg.message_id, message_has_custom_emoji(msg)
 
     caption = text
 
@@ -368,7 +367,7 @@ async def _publish_once(
             msg = await bot.send_photo(chat_id=target_channel, photo=f, caption=caption)
         else:
             msg = await bot.send_video(chat_id=target_channel, video=f, caption=caption)
-        return msg.message_id
+        return msg.message_id, message_has_custom_emoji(msg)
 
     # Альбом (до 10 элементов) — возвращает список сообщений
     media: list = []
@@ -380,7 +379,17 @@ async def _publish_once(
         else:
             media.append(InputMediaVideo(media=f, caption=cap))
     msgs = await bot.send_media_group(chat_id=target_channel, media=media)
-    return msgs[0].message_id if msgs else None
+    return (
+        (msgs[0].message_id, message_has_custom_emoji(msgs[0]))
+        if msgs else (None, False)
+    )
+
+
+def message_has_custom_emoji(message: Message) -> bool:
+    entities = list(getattr(message, "entities", None) or []) + list(
+        getattr(message, "caption_entities", None) or []
+    )
+    return any(entity.type == MessageEntityType.CUSTOM_EMOJI for entity in entities)
 
 
 async def publish(
@@ -397,10 +406,18 @@ async def publish(
     emoji_retried = False
     for attempt in range(3):
         try:
-            message_id = await _publish_once(bot, target_channel, current_text, media_files)
+            message_id, delivered_custom_emoji = await _publish_once(
+                bot, target_channel, current_text, media_files,
+            )
             if _CUSTOM_EMOJI_RE.search(current_text):
                 try:
-                    await db.set_service_state("fragment_integration", "healthy")
+                    await db.set_service_state(
+                        "fragment_integration",
+                        "healthy" if delivered_custom_emoji else "faulty",
+                        "" if delivered_custom_emoji else (
+                            "Telegram accepted the post but removed Custom Emoji"
+                        ),
+                    )
                 except Exception:
                     log.warning("Could not persist Fragment health", exc_info=True)
             return message_id
