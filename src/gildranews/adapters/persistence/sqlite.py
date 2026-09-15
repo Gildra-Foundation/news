@@ -843,8 +843,8 @@ async def cleanup_old_data() -> dict:
     )
     published_removed = cur.rowcount
     await db.commit()
-    # VACUUM нельзя внутри транзакции — отдельным execute
-    await db.execute("VACUUM")
+    # Освободившиеся страницы переиспользует SQLite. VACUUM здесь небезопасен:
+    # другая корутина может открыть транзакцию на общем соединении после commit.
     return {
         "drafts": drafts_removed,
         "edits": edits_removed,
