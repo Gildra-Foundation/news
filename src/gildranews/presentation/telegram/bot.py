@@ -459,56 +459,17 @@ async def run_bot() -> None:
         text = drafts.format_draft_text(draft)
         media = drafts.photo_argument(draft["image_url"])
         media_type = draft.get("media_type") or "photo"
-        target_msg_id: int | None = None
-        requested_custom_emoji = tg_writer.without_custom_emojis(text) != text
-        used_unicode_fallback = False
-
-        async def _send_draft(formatted_text: str):
-            if media:
-                if media_type == "video":
-                    return await bot.send_video(
-                        chat_id=cfg.target_channel, video=media, caption=formatted_text,
-                    )
-                return await bot.send_photo(
-                    chat_id=cfg.target_channel, photo=media, caption=formatted_text,
-                )
-            return await bot.send_message(
-                chat_id=cfg.target_channel,
-                text=formatted_text,
-                disable_web_page_preview=True,
-            )
-
-        try:
-            sent = await _send_draft(text)
-            target_msg_id = sent.message_id
-        except TelegramAPIError as e:
-            fallback_text = tg_writer.without_custom_emojis(text)
-            if fallback_text != text:
-                try:
-                    sent = await _send_draft(fallback_text)
-                    target_msg_id = sent.message_id
-                    used_unicode_fallback = True
-                except TelegramAPIError as fallback_error:
-                    log.exception("publish from draft failed without Custom Emoji")
-                    await callback.answer(
-                        f"Ошибка: {fallback_error}", show_alert=True,
-                    )
-                    return
-            else:
-                log.exception("publish from draft failed")
-                await callback.answer(f"Ошибка: {e}", show_alert=True)
-                return
-
-        if requested_custom_emoji:
-            try:
-                delivered = not used_unicode_fallback and tg_writer.message_has_custom_emoji(sent)
-                await db.set_service_state(
-                    "fragment_integration",
-                    "healthy" if delivered else "faulty",
-                    "" if delivered else "Telegram did not preserve Custom Emoji",
-                )
-            except Exception:
-                log.warning("Could not persist Fragment health", exc_info=True)
+        media_files = (
+            [(draft["image_url"], media_type)]
+            if media and draft.get("image_url")
+            else None
+        )
+        target_msg_id = await tg_writer.publish(
+            bot, cfg.target_channel, text, media_files,
+        )
+        if target_msg_id is None:
+            await callback.answer("Ошибка публикации", show_alert=True)
+            return
 
         # Зафиксировать в published_posts для дедупа и дайджеста
         await db.record_published(

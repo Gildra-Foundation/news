@@ -189,6 +189,26 @@ async def test_publish_prefers_configured_mtproto_transport(monkeypatch) -> None
     assert states == [("fragment_integration", "healthy")]
 
 
+@pytest.mark.asyncio
+async def test_publish_bot_fallback_keeps_remote_media_url() -> None:
+    received: list[object] = []
+
+    class Bot:
+        async def send_photo(self, **kwargs):
+            received.append(kwargs["photo"])
+            return SimpleNamespace(message_id=94, entities=[], caption_entities=[])
+
+    result = await tg_writer.publish(
+        Bot(),
+        "@channel",
+        "<b>Заголовок</b>",
+        [("https://cdn.example/raid.jpg", "photo")],
+    )
+
+    assert result == 94
+    assert received == ["https://cdn.example/raid.jpg"]
+
+
 def test_emoji_override_ignores_invalid_patterns_and_finds_valid_match() -> None:
     emoji_map = {
         "broken": {"id": "1", "fallback": "?", "match_pattern": "["},

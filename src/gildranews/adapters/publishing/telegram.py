@@ -371,7 +371,7 @@ async def _publish_once(
 
     if len(media_files) == 1:
         path, kind = media_files[0]
-        f = FSInputFile(path)
+        f = _media_input(path)
         if kind == "photo":
             msg = await bot.send_photo(chat_id=target_channel, photo=f, caption=caption)
         else:
@@ -381,7 +381,7 @@ async def _publish_once(
     # Альбом (до 10 элементов) — возвращает список сообщений
     media: list = []
     for i, (path, kind) in enumerate(media_files[:10]):
-        f = FSInputFile(path)
+        f = _media_input(path)
         cap = caption if i == 0 else None
         if kind == "photo":
             media.append(InputMediaPhoto(media=f, caption=cap))
@@ -399,6 +399,12 @@ def message_has_custom_emoji(message: Message) -> bool:
         getattr(message, "caption_entities", None) or []
     )
     return any(entity.type == MessageEntityType.CUSTOM_EMOJI for entity in entities)
+
+
+def _media_input(path: str) -> str | FSInputFile:
+    if path.startswith(("https://", "http://")):
+        return path
+    return FSInputFile(path)
 
 
 async def publish(
