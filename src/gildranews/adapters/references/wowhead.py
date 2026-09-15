@@ -67,6 +67,15 @@ _CLASS_CATALOG = {
     "demon hunter": (12, "demon-hunter", "classicon_demonhunter"),
     "evoker": (13, "evoker", "classicon_evoker"),
 }
+_SPECIALIZATION_CATALOG = {
+    "augmentation": (1473, 13, "evoker", "classicon_evoker_augmentation"),
+    "augmentation evoker": (1473, 13, "evoker", "classicon_evoker_augmentation"),
+    "devastation": (1467, 13, "evoker", "classicon_evoker_devastation"),
+    "devastation evoker": (1467, 13, "evoker", "classicon_evoker_devastation"),
+    "retribution": (70, 2, "paladin", "spell_holy_auraoflight"),
+    "retribution paladin": (70, 2, "paladin", "spell_holy_auraoflight"),
+    "frost mage": (64, 8, "mage", "spell_frost_frostbolt02"),
+}
 
 
 class _JsonScriptParser(HTMLParser):
@@ -188,6 +197,21 @@ async def resolve_entity(
             canonical_name=query,
             localized_name=reference.label.strip(),
             page_url=f"https://www.wowhead.com/{page_branch}class={class_id}/{slug}",
+            icon_url=f"https://wow.zamimg.com/images/wow/icons/large/{icon}.jpg",
+        )
+    if (
+        reference.kind == "specialization"
+        and reference.branch == "retail"
+        and (specialization_info := _SPECIALIZATION_CATALOG.get(_name_key(query)))
+    ):
+        specialization_id, class_id, class_slug, icon = specialization_info
+        return ResolvedWarcraftEntity(
+            branch=reference.branch,
+            kind=reference.kind,
+            external_id=specialization_id,
+            canonical_name=query,
+            localized_name=reference.label.strip(),
+            page_url=f"https://www.wowhead.com/class={class_id}/{class_slug}",
             icon_url=f"https://wow.zamimg.com/images/wow/icons/large/{icon}.jpg",
         )
     if reference.branch == "forever":

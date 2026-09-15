@@ -46,6 +46,13 @@ _LINKABLE_CONTEXT_RE = re.compile(r"\b(?:raid|dungeon|boss)\b", re.IGNORECASE)
 _NAMED_GAME_OBJECT_RE = re.compile(
     r"\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+)+\b",
 )
+_RANKING_CONTEXT_RE = re.compile(r"\b(?:dps|rankings?|logs?)\b", re.IGNORECASE)
+_SPECIALIZATION_REFERENCE_ALIASES = {
+    "augmentation": frozenset({"augmentation", "augmentation evoker"}),
+    "devastation": frozenset({"devastation", "devastation evoker"}),
+    "retribution": frozenset({"retribution", "retribution paladin"}),
+    "frost mage": frozenset({"frost mage"}),
+}
 
 _JSON_SUFFIX = """
 
@@ -60,6 +67,7 @@ _FILTER_JSON_SUFFIX = """
 {"is_news":true,"reason":"...","title":"...","body":"...","emoji_theme":"...","hashtag":"...","infographic":null,"references":[]}
 infographic может быть объектом с полями kicker, title, facts (2–4 объектов value/label), source="". Каждое value должно дословно встречаться во входном post. Для отклонённой новости infographic=null. Не добавляй источник, URL или название издания в title/body.
 references — не более трёх объектов {"label":"точный текст из title/body","query":"точное исходное английское имя из post","kind":"class|specialization|spell|talent|item|cosmetic|transmog_set|mount|pet|achievement|raid|dungeon|boss|creature|faction|profession|event|expansion","branch":"retail|classic|forever","role":"primary|secondary"}. Название дополнения сохраняй на английском и помечай kind=expansion. URL, ID и изображения не придумывай: их найдёт бот. Главную изменяемую сущность пометь primary, остальные secondary. Для остальных случаев references=[].
+В рейтинге специализаций включи в references две самые важные специализации с kind=specialization для значков и названный рейд с kind=raid для ссылки. Для специализаций используй точные английские названия из post; классы отдельными references не добавляй.
 Если материал относится к WoW: Forever, обязательно включи reference с label="WoW: Forever", query="WoW: Forever", kind="expansion", branch="forever", role="primary".
 """
 
@@ -75,6 +83,7 @@ _RUSSIAN_REPAIR_PROMPT = """Ты — выпускающий редактор р�
 — исправь перечисленные presentation_issues: не повторяй заголовок в начале, раздели плотный текст и сократи body до 750 символов;
 — исправь перечисленные specialization_issues и при первом упоминании называй класс вместе со специализацией: Augmentation Evoker — «пробудитель Насыщатель», Devastation Evoker — «пробудитель Опустошитель», Retribution Paladin — «паладин Воздаяния», Enhancement Shaman — «шаман Совершенствование»;
 — если переданы reference_issues, добавь ссылочную сущность названного рейда, подземелья или босса: label обязан дословно находиться в русском title/body, query — быть точным английским названием из source_text; не создавай ссылки на классы;
+— для ranking_without_specialization_references добавь две главные специализации как references с kind=specialization: label — точное русское название из title/body, query — точное английское название из source_text; главную пометь primary;
 — начни с события, действия или числа; пиши прямыми короткими фразами без канцелярита;
 — recent_published используй как индекс уже опубликованных сюжетов: оставь в центре только новый факт;
 — recent_voice_examples задают только длину и ритм канала; не копируй из них формулировки;
@@ -240,6 +249,33 @@ def _reference_issues(
     return ()
 
 
+def _specialization_reference_issues(
+    source: str,
+    references: tuple[EntityReference, ...],
+) -> tuple[str, ...]:
+    if not _RANKING_CONTEXT_RE.search(source):
+        return ()
+    source_key = source.casefold()
+    mentioned = {
+        key
+        for key, aliases in _SPECIALIZATION_REFERENCE_ALIASES.items()
+        if any(re.search(rf"\b{re.escape(alias)}\b", source_key) for alias in aliases)
+    }
+    required = min(2, len(mentioned))
+    if required == 0:
+        return ()
+    referenced = {
+        key
+        for reference in references
+        if reference.kind == "specialization"
+        for key, aliases in _SPECIALIZATION_REFERENCE_ALIASES.items()
+        if reference.query.casefold().strip() in aliases
+    }
+    if len(mentioned & referenced) < required:
+        return ("ranking_without_specialization_references",)
+    return ()
+
+
 class AppServerContentAI:
     """Luna-backed content adapter over the server's AG-UI endpoint."""
 
@@ -325,7 +361,10 @@ class AppServerContentAI:
         style_markers = artificial_style_markers(public_text)
         layout_issues = presentation_issues(rewrite.title, rewrite.body)
         spec_issues = specialization_issues(text, public_text)
-        reference_issues = _reference_issues(text, rewrite.references)
+        reference_issues = (
+            *_reference_issues(text, rewrite.references),
+            *_specialization_reference_issues(text, rewrite.references),
+        )
         if terms or style_markers or layout_issues or spec_issues or reference_issues:
             repaired_output = await self._complete(
                 _RUSSIAN_REPAIR_PROMPT,
@@ -370,6 +409,7 @@ class AppServerContentAI:
                 or presentation_issues(repaired.title, repaired.body)
                 or specialization_issues(text, repaired_text)
                 or _reference_issues(text, repaired_references)
+                or _specialization_reference_issues(text, repaired_references)
             ):
                 log.warning("Editorial repair did not pass language and style gates")
                 return None

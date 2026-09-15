@@ -231,6 +231,75 @@ async def test_class_resolver_uses_stable_core_catalog_without_network() -> None
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("query", "label", "specialization_id", "class_id", "class_slug", "icon"),
+    [
+        (
+            "Augmentation",
+            "Насыщатель",
+            1473,
+            13,
+            "evoker",
+            "classicon_evoker_augmentation",
+        ),
+        (
+            "Devastation",
+            "Опустошитель",
+            1467,
+            13,
+            "evoker",
+            "classicon_evoker_devastation",
+        ),
+        (
+            "Retribution",
+            "Воздаяние",
+            70,
+            2,
+            "paladin",
+            "spell_holy_auraoflight",
+        ),
+        (
+            "Frost Mage",
+            "Лёд",
+            64,
+            8,
+            "mage",
+            "spell_frost_frostbolt02",
+        ),
+    ],
+)
+async def test_specialization_resolver_uses_verified_core_catalog_without_network(
+    query,
+    label,
+    specialization_id,
+    class_id,
+    class_slug,
+    icon,
+) -> None:
+    called = False
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        return httpx.Response(500, request=request)
+
+    reference = WarcraftEntityRef(
+        label=label,
+        query=query,
+        kind="specialization",
+        role="primary",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await resolve_entity(reference, http_client=client)
+
+    assert result is not None
+    assert result.external_id == specialization_id
+    assert result.page_url == f"https://www.wowhead.com/class={class_id}/{class_slug}"
+    assert result.icon_url.endswith(f"/{icon}.jpg")
+    assert called is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("kind", "type_code", "type_name", "page_slug"),
     [
         ("specialization", 6, "Spell", "spell"),

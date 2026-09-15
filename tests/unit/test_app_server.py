@@ -536,11 +536,25 @@ async def test_luna_repairs_ambiguous_specializations_and_adds_raid_reference() 
                 "hashtag": "полезное",
                 "references": [
                     {
+                        "label": "Насыщатель",
+                        "query": "Augmentation",
+                        "kind": "specialization",
+                        "branch": "retail",
+                        "role": "primary",
+                    },
+                    {
+                        "label": "Опустошитель",
+                        "query": "Devastation",
+                        "kind": "specialization",
+                        "branch": "retail",
+                        "role": "secondary",
+                    },
+                    {
                         "label": "Ядовитой Бездне",
                         "query": "Venomous Abyss",
                         "kind": "raid",
                         "branch": "retail",
-                        "role": "primary",
+                        "role": "secondary",
                     }
                 ],
             },
@@ -556,6 +570,8 @@ async def test_luna_repairs_ambiguous_specializations_and_adds_raid_reference() 
     assert "Паладин Воздаяния" in result.body
     assert "пробудитель Опустошитель" in result.body
     assert [(reference.query, reference.kind) for reference in result.references] == [
+        ("Augmentation", "specialization"),
+        ("Devastation", "specialization"),
         ("Venomous Abyss", "raid"),
     ]
 
@@ -598,3 +614,68 @@ async def test_luna_repairs_named_raid_post_without_reference() -> None:
     assert [(reference.query, reference.kind) for reference in result.references] == [
         ("Venomous Abyss", "raid"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_luna_repairs_ranking_post_without_specialization_references() -> None:
+    source = (
+        "Venomous Abyss raid rankings: Augmentation rises seven places and "
+        "Devastation rises four places."
+    )
+    app_server = _SequenceAppServer(
+        [
+            {
+                "is_news": True,
+                "reason": "Изменился рейтинг специализаций",
+                "title": "Насыщатель поднялся на семь мест",
+                "body": (
+                    "В Ядовитой Бездне пробудитель Насыщатель поднялся на семь "
+                    "мест, а пробудитель Опустошитель — на четыре."
+                ),
+                "hashtag": "полезное",
+                "references": [
+                    {
+                        "label": "Ядовитой Бездне",
+                        "query": "Venomous Abyss",
+                        "kind": "raid",
+                    }
+                ],
+            },
+            {
+                "title": "Насыщатель поднялся на семь мест",
+                "body": (
+                    "В Ядовитой Бездне пробудитель Насыщатель поднялся на семь "
+                    "мест, а пробудитель Опустошитель — на четыре."
+                ),
+                "hashtag": "полезное",
+                "references": [
+                    {
+                        "label": "Насыщатель",
+                        "query": "Augmentation",
+                        "kind": "specialization",
+                        "role": "primary",
+                    },
+                    {
+                        "label": "Опустошитель",
+                        "query": "Devastation",
+                        "kind": "specialization",
+                    },
+                    {
+                        "label": "Ядовитой Бездне",
+                        "query": "Venomous Abyss",
+                        "kind": "raid",
+                    },
+                ],
+            },
+        ]
+    )
+    processor = AppServerContentAI(app_server)
+
+    result = await processor.filter_and_rewrite(source, [], [])
+
+    assert result is not None
+    assert [
+        reference.query
+        for reference in result.references
+        if reference.kind == "specialization"
+    ] == ["Augmentation", "Devastation"]
