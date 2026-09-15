@@ -6,6 +6,7 @@ import asyncio
 import os
 import re
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from urllib.parse import urlparse
 
@@ -20,21 +21,56 @@ MAX_QUERY_CHARS = 180
 ALLOWED_IMAGE_HOSTS = frozenset({"wow.zamimg.com", "static.icy-veins.com"})
 _WORD_RE = re.compile(r"[A-Za-z0-9]{3,}")
 _SEARCH_NOISE = frozenset({"the", "and", "world", "warcraft", "wow", "raid", "news"})
+_IMAGE_NOISE = ("avatar", "favicon", "placeholder", "site-logo", "site_logo")
+_KIND_TERMS = {
+    "raid": ("raid", "boss", "instance"),
+    "dungeon": ("dungeon", "boss", "instance"),
+    "boss": ("boss", "encounter"),
+    "creature": ("npc", "creature"),
+    "spell": ("spell", "ability"),
+    "talent": ("talent", "spell"),
+    "item": ("item", "gear"),
+    "cosmetic": ("cosmetic", "transmog", "armor"),
+    "transmog_set": ("transmog", "armor", "set"),
+    "mount": ("mount",),
+    "pet": ("pet", "companion"),
+    "expansion": ("expansion",),
+}
 PageFetcher = Callable[[str], Awaitable[bytes | None]]
+
+
+@dataclass(slots=True)
+class _ImageCandidate:
+    url: str
+    width: int | None = None
+    height: int | None = None
+    alt: str = ""
 
 
 class _OpenGraphImageParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.image_url = ""
+        self.images: list[_ImageCandidate] = []
 
     def handle_starttag(self, tag: str, attrs) -> None:
-        if tag != "meta" or self.image_url:
+        if tag != "meta":
             return
         attributes = {key.lower(): value for key, value in attrs if value is not None}
         name = attributes.get("property", attributes.get("name", "")).lower()
         if name in {"og:image", "twitter:image"}:
-            self.image_url = attributes.get("content", "").strip()
+            url = attributes.get("content", "").strip()
+            if url:
+                self.images.append(_ImageCandidate(url=url))
+        elif self.images and name in {
+            "og:image:width", "twitter:image:width",
+            "og:image:height", "twitter:image:height",
+        }:
+            value = attributes.get("content", "").strip()
+            if value.isdigit():
+                field = "width" if name.endswith(":width") else "height"
+                setattr(self.images[-1], field, int(value))
+        elif self.images and name in {"og:image:alt", "twitter:image:alt"}:
+            self.images[-1].alt = attributes.get("content", "").strip()
 
 
 def _safe_page_url(value: str) -> bool:
@@ -88,6 +124,53 @@ def _relevant(query: str, result: dict) -> bool:
     return matches >= min(2, len(words))
 
 
+def _result_score(query: str, result: dict, entity_kind: str) -> int:
+    title = str(result.get("title", "")).casefold()
+    snippet = str(result.get("snippet", "")).casefold()
+    haystack = f"{title} {snippet}"
+    words = {
+        word.casefold()
+        for word in _WORD_RE.findall(query)
+        if word.casefold() not in _SEARCH_NOISE
+    }
+    score = sum(2 for word in words if word in haystack)
+    normalized_query = " ".join(query.casefold().split())
+    if normalized_query and normalized_query in title:
+        score += 20
+    if words and all(word in title for word in words):
+        score += 8
+    score += 5 * sum(term in haystack for term in _KIND_TERMS.get(entity_kind, ()))
+    return score
+
+
+def _best_page_image(parser: _OpenGraphImageParser, query: str) -> str | None:
+    words = {
+        word.casefold()
+        for word in _WORD_RE.findall(query)
+        if word.casefold() not in _SEARCH_NOISE
+    }
+    ranked: list[tuple[int, int, str]] = []
+    for index, image in enumerate(parser.images):
+        if not _safe_image_url(image.url):
+            continue
+        if image.width is not None and image.height is not None:
+            if image.width < 400 or image.height < 225:
+                continue
+            ratio = image.width / image.height
+            if not 0.5 <= ratio <= 2.5:
+                continue
+        description = f"{image.url} {image.alt}".casefold()
+        score = 3 * sum(word in description for word in words)
+        if image.width is not None and image.height is not None:
+            score += min((image.width * image.height) // 100_000, 20)
+            if 1.2 <= image.width / image.height <= 2.2:
+                score += 4
+        if any(marker in description for marker in _IMAGE_NOISE):
+            score -= 20
+        ranked.append((score, -index, image.url))
+    return max(ranked, default=(0, 0, None))[2]
+
+
 async def _fetch_page_with_scrape_do(url: str) -> bytes | None:
     try:
         response = await asyncio.to_thread(
@@ -108,6 +191,7 @@ async def _fetch_page_with_scrape_do(url: str) -> bytes | None:
 async def find_warcraft_image(
     query: str,
     *,
+    entity_kind: str = "",
     token: str | None = None,
     http_client: httpx.AsyncClient | None = None,
     page_fetcher: PageFetcher | None = None,
@@ -130,6 +214,7 @@ async def find_warcraft_image(
                 "token": scrape_token,
                 "q": (
                     f'"World of Warcraft" {normalized_query} '
+                    f"{' '.join(_KIND_TERMS.get(entity_kind, ())[:2])} "
                     "(site:wowhead.com/news OR site:icy-veins.com/wow/news)"
                 ),
                 "safe": "active",
@@ -150,9 +235,15 @@ async def find_warcraft_image(
         if not isinstance(results, list):
             return None
         fetch_page = page_fetcher or _fetch_page_with_scrape_do
-        for raw in results[:5]:
-            if not isinstance(raw, dict) or not _relevant(normalized_query, raw):
-                continue
+        ranked_results = sorted(
+            (
+                raw for raw in results[:8]
+                if isinstance(raw, dict) and _relevant(normalized_query, raw)
+            ),
+            key=lambda raw: _result_score(normalized_query, raw, entity_kind),
+            reverse=True,
+        )
+        for raw in ranked_results[:5]:
             page_url = str(raw.get("link") or "").strip()
             if not _safe_page_url(page_url):
                 continue
@@ -162,8 +253,8 @@ async def find_warcraft_image(
             parser = _OpenGraphImageParser()
             parser.feed(document.decode("utf-8", errors="replace"))
             parser.close()
-            if _safe_image_url(parser.image_url):
-                return parser.image_url
+            if image_url := _best_page_image(parser, normalized_query):
+                return image_url
         return None
     except (httpx.HTTPError, UnicodeDecodeError, ValueError):
         return None

@@ -184,6 +184,9 @@ async def process_item(
                 try:
                     searched_image = await scrape_do_images.find_warcraft_image(
                         image_query,
+                        entity_kind=(
+                            primary_reference.kind if primary_reference is not None else ""
+                        ),
                     )
                     if searched_image:
                         source_path = await media_downloader.download(

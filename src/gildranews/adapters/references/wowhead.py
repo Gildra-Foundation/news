@@ -37,6 +37,13 @@ _EXPECTED_TYPES: dict[WarcraftEntityKind, frozenset[str]] = {
     "profession": frozenset({"Spell"}),
     "event": frozenset({"Achievement", "Zone"}),
 }
+_TYPE_PRIORITY: dict[WarcraftEntityKind, tuple[str, ...]] = {
+    "mount": ("Spell", "Item"),
+    "pet": ("NPC", "Item", "Spell"),
+    "cosmetic": ("Transmog Set", "Item"),
+    "faction": ("NPC", "Achievement"),
+    "event": ("Zone", "Achievement"),
+}
 _PAGE_SLUGS = {
     "NPC": "npc",
     "Item": "item",
@@ -185,6 +192,9 @@ async def resolve_entity(
         )
     if reference.branch == "forever":
         return None
+    expected_types = _EXPECTED_TYPES.get(reference.kind)
+    if expected_types is None:
+        return None
     branch_path = "classic/" if reference.branch == "classic" else ""
     url = f"https://www.wowhead.com/{branch_path}search/suggestions-template"
     owns_client = http_client is None
@@ -208,7 +218,6 @@ async def resolve_entity(
                 chunks.append(chunk)
         payload = json.loads(b"".join(chunks))
         results = payload.get("results", []) if isinstance(payload, dict) else []
-        expected_types = _EXPECTED_TYPES[reference.kind]
         exact: list[tuple[dict, str]] = []
         for candidate in results:
             if not isinstance(candidate, dict) or _name_key(str(candidate.get("name", ""))) != _name_key(query):
@@ -220,13 +229,32 @@ async def resolve_entity(
             exact.append((candidate, type_name))
         if not exact:
             return None
+        priority = _TYPE_PRIORITY.get(reference.kind)
+        if priority:
+            best_rank = min(priority.index(type_name) for _candidate, type_name in exact)
+            exact = [
+                (candidate, type_name)
+                for candidate, type_name in exact
+                if priority.index(type_name) == best_rank
+            ]
         identities = {
-            (type_name, str(candidate.get("icon") or ""))
+            (type_name, int(candidate["id"]))
             for candidate, type_name in exact
         }
-        if len(identities) > 1:
+        if len(identities) != 1:
             return None
-        candidate, type_name = exact[0]
+        valid_icons = [
+            (candidate, type_name)
+            for candidate, type_name in exact
+            if not candidate.get("icon")
+            or _ICON_RE.fullmatch(str(candidate.get("icon")).lower())
+        ]
+        if not valid_icons:
+            return None
+        candidate, type_name = max(
+            valid_icons,
+            key=lambda value: bool(value[0].get("icon")),
+        )
         icon = str(candidate.get("icon") or "").lower()
         if icon and not _ICON_RE.fullmatch(icon):
             return None

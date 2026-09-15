@@ -259,8 +259,9 @@ async def test_scrape_do_finds_entity_image_before_infographic_fallback(
         assert (hours, limit) == (48, 50)
         return []
 
-    async def find_image(query: str) -> str:
+    async def find_image(query: str, *, entity_kind: str = "") -> str:
         assert query == "Venomous Abyss"
+        assert entity_kind == "raid"
         return "https://static.icy-veins.com/wp/venomous-abyss-raid.webp"
 
     async def download(url, destination_dir, *, kind, allowed_hosts):

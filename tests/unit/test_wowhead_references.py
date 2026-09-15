@@ -124,6 +124,63 @@ async def test_resolve_entity_rejects_ambiguous_exact_icons() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resolve_entity_prefers_spell_for_mount_over_item_result() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "results": [
+                    {
+                        "type": 3,
+                        "typeName": "Item",
+                        "id": 111,
+                        "name": "Ashes of Al'ar",
+                        "icon": "inv_misc_summerfest_brazierorange",
+                    },
+                    {
+                        "type": 6,
+                        "typeName": "Spell",
+                        "id": 40192,
+                        "name": "Ashes of Al'ar",
+                        "icon": "ability_mount_fireravengodmount",
+                    },
+                ],
+            },
+        )
+
+    reference = WarcraftEntityRef("Пепел Ал'ара", "Ashes of Al'ar", "mount")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await resolve_entity(reference, http_client=client)
+
+    assert result is not None
+    assert result.external_id == 40192
+    assert result.page_url == "https://www.wowhead.com/spell=40192"
+    assert result.icon_url.endswith("/ability_mount_fireravengodmount.jpg")
+
+
+@pytest.mark.asyncio
+async def test_resolve_entity_rejects_different_ids_even_with_same_icon() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "results": [
+                    {"type": 6, "id": 133, "name": "Fireball", "icon": "fireball"},
+                    {"type": 6, "id": 999, "name": "Fireball", "icon": "fireball"},
+                ],
+            },
+        )
+
+    reference = WarcraftEntityRef("Огненный шар", "Fireball", "spell")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await resolve_entity(reference, http_client=client)
+
+    assert result is None
+
+
+@pytest.mark.asyncio
 async def test_resolve_entity_does_not_search_forever_in_retail_database() -> None:
     reference = WarcraftEntityRef(
         "Неизвестная способность",
@@ -133,6 +190,25 @@ async def test_resolve_entity_does_not_search_forever_in_retail_database() -> No
     )
 
     assert await resolve_entity(reference) is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_entity_leaves_expansion_logos_to_curated_catalog() -> None:
+    called = False
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        return httpx.Response(500, request=request)
+
+    reference = WarcraftEntityRef(
+        "The Last Titan", "The Last Titan", "expansion", role="primary",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await resolve_entity(reference, http_client=client)
+
+    assert result is None
+    assert called is False
 
 
 @pytest.mark.asyncio
