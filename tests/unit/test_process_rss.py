@@ -94,8 +94,9 @@ async def test_process_rss_item_publishes_without_source_attribution(monkeypatch
         assert allowed_hosts == {"wow.zamimg.com"}
         return destination_dir / ("source.jpg" if kind == "photo" else "source.mp4")
 
-    async def fetch_article_media(url):
+    async def fetch_article_media(url, *, relevance_text=""):
         assert url == "https://www.wowhead.com/news=382863/example"
+        assert relevance_text == "Minimap Addon Tech Will Be Disabled"
         return "https://wow.zamimg.com/image.jpg", "https://wow.zamimg.com/clip.mp4"
 
     async def record_published(channel, message_id, title, body, target_message_id) -> None:
@@ -170,8 +171,9 @@ async def test_icy_veins_uses_article_raid_cover_instead_of_infographic(
     async def recent_context(hours: int, limit: int) -> list[dict[str, str]]:
         return []
 
-    async def fetch_article_media(url):
+    async def fetch_article_media(url, *, relevance_text=""):
         assert url == "https://www.icy-veins.com/wow/news/raid-tuning/"
+        assert relevance_text == "Massive Venomous Abyss Raid Tuning"
         return (
             "https://static.icy-veins.com/wp/venomousabyss-ulatek.webp",
             "",
@@ -229,6 +231,7 @@ async def test_icy_veins_uses_article_raid_cover_instead_of_infographic(
         content="Fragments reduced by 25%; eight spawns remain.",
         published_at=datetime.now(UTC),
         article_url="https://www.icy-veins.com/wow/news/raid-tuning/",
+        image_url="https://static.icy-veins.com/wp/generic-cover.webp",
     )
 
     result = await process_rss.process_item(

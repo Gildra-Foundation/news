@@ -100,6 +100,9 @@ _SORCERER_RE = re.compile(
     r"\b(" + "|".join(sorted(_SORCERER_FORMS, key=len, reverse=True)) + r")\b",
     re.IGNORECASE,
 )
+_AUGMENTATION_RE = re.compile(r"\bAugmentation\b", re.IGNORECASE)
+_RETRIBUTION_RE = re.compile(r"\bRetribution\b", re.IGNORECASE)
+_DEVASTATION_RE = re.compile(r"\bDevastation\b", re.IGNORECASE)
 
 
 def _preserve_case(source: str, replacement: str) -> str:
@@ -140,6 +143,27 @@ def normalize_wow_expansion_names(source: str, translated: str) -> str:
                 flags=re.IGNORECASE,
             )
     return result
+
+
+def specialization_issues(source: str, translated: str) -> tuple[str, ...]:
+    """Detect ambiguous literal translations of frequently confused WoW specs."""
+    text = translated.casefold()
+    issues: list[str] = []
+    if _AUGMENTATION_RE.search(source) and (
+        "насыщател" not in text
+        or "пробудител" not in text
+        or re.search(r"\bусилени\w*\b", text)
+    ):
+        issues.append("augmentation_mistranslated")
+    if _RETRIBUTION_RE.search(source) and (
+        "воздаяни" not in text or "паладин" not in text
+    ):
+        issues.append("retribution_without_paladin")
+    if _DEVASTATION_RE.search(source) and (
+        "опустошител" not in text or "пробудител" not in text
+    ):
+        issues.append("devastation_without_evoker")
+    return tuple(issues)
 
 
 def untranslated_terms(text: str) -> tuple[str, ...]:

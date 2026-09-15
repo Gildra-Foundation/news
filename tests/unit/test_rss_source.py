@@ -101,6 +101,24 @@ def test_extract_article_media_finds_cover_and_direct_video() -> None:
     )
 
 
+def test_extract_article_media_prefers_ranking_chart_over_generic_cover() -> None:
+    html = b"""
+    <html><head>
+      <meta property="og:image" content="https://static.icy-veins.com/wp/Retribution.jpg">
+    </head><body>
+      <img src="https://static.icy-veins.com/wp/DPS-Damage-Statistics-Heroic-Venomous-Abyss-Warcraft-Logs.jpg">
+      <img src="https://static.icy-veins.com/wp/unrelated-recommended-story.jpg">
+    </body></html>
+    """
+
+    image_url, _video_url = extract_article_media(
+        html,
+        relevance_text="Popularity and DPS Rankings: Week 4 Raid Logs",
+    )
+
+    assert image_url.endswith("DPS-Damage-Statistics-Heroic-Venomous-Abyss-Warcraft-Logs.jpg")
+
+
 @pytest.mark.asyncio
 async def test_fetch_article_media_accepts_icy_veins_raid_cover() -> None:
     article_url = "https://www.icy-veins.com/wow/news/raid-tuning/"

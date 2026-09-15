@@ -20,6 +20,16 @@ _MEDIA_TAG = "{http://search.yahoo.com/mrss/}content"
 _ARTICLE_ID_RE = re.compile(r"(?:news=|/news/)(\d+)")
 _SPACE_RE = re.compile(r"[ \t\r\f\v]+")
 _PARAGRAPH_RE = re.compile(r"\n{3,}")
+_ANALYTICS_TOPIC_RE = re.compile(
+    r"\b(?:dps|rankings?|logs?|statistics?)\b",
+    re.IGNORECASE,
+)
+_ANALYTICS_IMAGE_MARKERS = (
+    "warcraft-logs",
+    "damage-statistics",
+    "dps-",
+    "ranking",
+)
 
 
 class _HTMLText(HTMLParser):
@@ -52,6 +62,7 @@ class _HTMLMedia(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.image_url = ""
         self.video_url = ""
+        self.inline_images: list[str] = []
 
     def handle_starttag(self, tag: str, attrs) -> None:
         attributes = {key.lower(): value for key, value in attrs if value is not None}
@@ -72,6 +83,12 @@ class _HTMLMedia(HTMLParser):
             media_type = attributes.get("type", "").lower()
             if media_type == "video/mp4":
                 self.video_url = _http_url(attributes.get("src"))
+        elif tag == "img":
+            image_url = _http_url(
+                attributes.get("data-src") or attributes.get("src"),
+            )
+            if image_url:
+                self.inline_images.append(image_url)
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,7 +151,11 @@ def source_key(url: str) -> str:
     return f"rss:{host}" if host else "rss"
 
 
-def extract_article_media(document: bytes) -> tuple[str, str]:
+def extract_article_media(
+    document: bytes,
+    *,
+    relevance_text: str = "",
+) -> tuple[str, str]:
     if len(document) > MAX_ARTICLE_BYTES:
         raise ValueError("HTML-документ статьи слишком большой")
     parser = _HTMLMedia()
@@ -143,7 +164,21 @@ def extract_article_media(document: bytes) -> tuple[str, str]:
         parser.close()
     except (UnicodeDecodeError, ValueError) as exc:
         raise ValueError("Некорректный HTML статьи") from exc
-    return parser.image_url, parser.video_url
+    image_url = parser.image_url
+    if _ANALYTICS_TOPIC_RE.search(relevance_text):
+        relevant_chart = next(
+            (
+                candidate
+                for candidate in parser.inline_images
+                if any(
+                    marker in candidate.casefold()
+                    for marker in _ANALYTICS_IMAGE_MARKERS
+                )
+            ),
+            "",
+        )
+        image_url = relevant_chart or image_url
+    return image_url, parser.video_url
 
 
 def parse_feed(document: bytes, *, source: str) -> list[RSSItem]:
@@ -224,6 +259,7 @@ async def fetch_feed(
 async def fetch_article_media(
     url: str,
     *,
+    relevance_text: str = "",
     http_client: httpx.AsyncClient | None = None,
 ) -> tuple[str, str]:
     expected_source = source_key(url)
@@ -247,7 +283,10 @@ async def fetch_article_media(
                 if size > MAX_ARTICLE_BYTES:
                     raise ValueError("HTML-документ статьи слишком большой")
                 chunks.append(chunk)
-        return extract_article_media(b"".join(chunks))
+        return extract_article_media(
+            b"".join(chunks),
+            relevance_text=relevance_text,
+        )
     finally:
         if owns_client:
             await client.aclose()

@@ -140,9 +140,12 @@ async def process_item(
                 if item.article_url and (not image_url or not video_url):
                     try:
                         discovered_image, discovered_video = (
-                            await rss_source.fetch_article_media(item.article_url)
+                            await rss_source.fetch_article_media(
+                                item.article_url,
+                                relevance_text=item.title,
+                            )
                         )
-                        image_url = image_url or discovered_image
+                        image_url = discovered_image or image_url
                         video_url = video_url or discovered_video
                     except Exception:
                         log.warning(

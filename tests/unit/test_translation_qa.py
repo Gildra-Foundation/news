@@ -3,6 +3,7 @@ from gildranews.application.translation_qa import (
     normalize_wow_class_terms,
     normalize_wow_expansion_names,
     presentation_issues,
+    specialization_issues,
     untranslated_terms,
 )
 
@@ -69,6 +70,23 @@ def test_normalize_wow_class_terms_preserves_ambiguous_lore_wording() -> None:
     translated = "Маг встречает чернокнижника и безымянного колдуна."
 
     assert normalize_wow_class_terms(source, translated) == translated
+
+
+def test_specialization_issues_detects_ambiguous_augmentation_translation() -> None:
+    source = (
+        "Augmentation rises seven spots. Retribution gains 50k logs and "
+        "Devastation rises four spots."
+    )
+    translated = (
+        "Усиление поднялось на семь мест. Воздаяние стало популярнее, "
+        "а Опустошение поднялось на четыре позиции."
+    )
+
+    assert specialization_issues(source, translated) == (
+        "augmentation_mistranslated",
+        "retribution_without_paladin",
+        "devastation_without_evoker",
+    )
 
 
 def test_artificial_style_markers_detects_ai_editorial_cliches() -> None:

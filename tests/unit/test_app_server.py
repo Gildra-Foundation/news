@@ -362,7 +362,7 @@ async def test_luna_preserves_official_expansion_name_and_reference() -> None:
 
 
 @pytest.mark.asyncio
-async def test_luna_drops_reference_query_not_present_in_source() -> None:
+async def test_luna_rejects_named_raid_when_reference_query_is_invented() -> None:
     processor = AppServerContentAI(
         _StubAppServer(
             {
@@ -384,8 +384,7 @@ async def test_luna_drops_reference_query_not_present_in_source() -> None:
 
     result = await processor.filter_and_rewrite("Venomous Abyss raid tuning", [], [])
 
-    assert result is not None
-    assert result.references == ()
+    assert result is None
 
 
 @pytest.mark.asyncio
@@ -503,3 +502,99 @@ async def test_luna_repairs_ai_sounding_editorial_cliches_before_publication() -
 
     assert result is not None
     assert result.body == "Урон способности снизили на 20%, поэтому бой станет проще."
+
+
+@pytest.mark.asyncio
+async def test_luna_repairs_ambiguous_specializations_and_adds_raid_reference() -> None:
+    source = (
+        "Heroic Venomous Abyss raid logs: Augmentation rises seven spots into "
+        "the top 10. Retribution gains around 50,000 logs. Devastation rises "
+        "four spots while Frost Mage drops eight spots."
+    )
+    app_server = _SequenceAppServer(
+        [
+            {
+                "is_news": True,
+                "reason": "Изменился рейтинг специализаций",
+                "title": "Усиление вошло в десятку рейтинга урона",
+                "body": (
+                    "В героической Ядовитой Бездне Усиление поднялось на семь "
+                    "мест. Воздаяние получило около 50,000 записей, а "
+                    "Опустошение поднялось на четыре позиции."
+                ),
+                "hashtag": "полезное",
+                "references": [],
+            },
+            {
+                "title": "Насыщатель вошёл в десятку рейтинга урона",
+                "body": (
+                    "В героической Ядовитой Бездне пробудитель Насыщатель "
+                    "поднялся на семь мест. Паладин Воздаяния получил около "
+                    "50,000 записей, а пробудитель Опустошитель поднялся на "
+                    "четыре позиции."
+                ),
+                "hashtag": "полезное",
+                "references": [
+                    {
+                        "label": "Ядовитой Бездне",
+                        "query": "Venomous Abyss",
+                        "kind": "raid",
+                        "branch": "retail",
+                        "role": "primary",
+                    }
+                ],
+            },
+        ]
+    )
+    processor = AppServerContentAI(app_server)
+
+    result = await processor.filter_and_rewrite(source, [], [])
+
+    assert result is not None
+    assert result.title == "Насыщатель вошёл в десятку рейтинга урона"
+    assert "пробудитель Насыщатель" in result.body
+    assert "Паладин Воздаяния" in result.body
+    assert "пробудитель Опустошитель" in result.body
+    assert [(reference.query, reference.kind) for reference in result.references] == [
+        ("Venomous Abyss", "raid"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_luna_repairs_named_raid_post_without_reference() -> None:
+    app_server = _SequenceAppServer(
+        [
+            {
+                "is_news": True,
+                "reason": "Новая статистика рейда",
+                "title": "Рейтинг урона в Ядовитой Бездне изменился",
+                "body": "В героическом режиме сменился лидер.",
+                "hashtag": "полезное",
+                "references": [],
+            },
+            {
+                "title": "Рейтинг урона в Ядовитой Бездне изменился",
+                "body": "В героическом режиме сменился лидер.",
+                "hashtag": "полезное",
+                "references": [
+                    {
+                        "label": "Ядовитой Бездне",
+                        "query": "Venomous Abyss",
+                        "kind": "raid",
+                        "branch": "retail",
+                        "role": "primary",
+                    }
+                ],
+            },
+        ]
+    )
+    processor = AppServerContentAI(app_server)
+
+    result = await processor.filter_and_rewrite(
+        "Heroic Venomous Abyss raid rankings changed.", [], [],
+    )
+
+    assert result is not None
+    assert [(reference.query, reference.kind) for reference in result.references] == [
+        ("Venomous Abyss", "raid"),
+    ]

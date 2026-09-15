@@ -18,6 +18,7 @@ from gildranews.application.translation_qa import (
     normalize_wow_class_terms,
     normalize_wow_expansion_names,
     presentation_issues,
+    specialization_issues,
     untranslated_terms,
 )
 from gildranews.domain.models import (
@@ -41,6 +42,10 @@ _STORY_CONTEXT_LIMIT = 50
 _STORY_BODY_LIMIT = 420
 _VOICE_CONTEXT_LIMIT = 5
 _VOICE_BODY_LIMIT = 700
+_LINKABLE_CONTEXT_RE = re.compile(r"\b(?:raid|dungeon|boss)\b", re.IGNORECASE)
+_NAMED_GAME_OBJECT_RE = re.compile(
+    r"\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+)+\b",
+)
 
 _JSON_SUFFIX = """
 
@@ -68,6 +73,8 @@ _RUSSIAN_REPAIR_PROMPT = """Ты — выпускающий редактор р�
 — не оставляй другую латиницу, кроме Blizzard, WoW, World of Warcraft и официального названия WoW: Forever;
 — убери перечисленные artificial_style_markers и любые редакторские комментарии о самом материале;
 — исправь перечисленные presentation_issues: не повторяй заголовок в начале, раздели плотный текст и сократи body до 750 символов;
+— исправь перечисленные specialization_issues и при первом упоминании называй класс вместе со специализацией: Augmentation Evoker — «пробудитель Насыщатель», Devastation Evoker — «пробудитель Опустошитель», Retribution Paladin — «паладин Воздаяния», Enhancement Shaman — «шаман Совершенствование»;
+— если переданы reference_issues, добавь ссылочную сущность названного рейда, подземелья или босса: label обязан дословно находиться в русском title/body, query — быть точным английским названием из source_text; не создавай ссылки на классы;
 — начни с события, действия или числа; пиши прямыми короткими фразами без канцелярита;
 — recent_published используй как индекс уже опубликованных сюжетов: оставь в центре только новый факт;
 — recent_voice_examples задают только длину и ритм канала; не копируй из них формулировки;
@@ -221,6 +228,18 @@ def _references(
     return tuple(references)
 
 
+def _reference_issues(
+    source: str,
+    references: tuple[EntityReference, ...],
+) -> tuple[str, ...]:
+    """Require a resolvable entity for posts about a specifically named instance."""
+    if any(reference.kind in {"raid", "dungeon", "boss"} for reference in references):
+        return ()
+    if _LINKABLE_CONTEXT_RE.search(source) and _NAMED_GAME_OBJECT_RE.search(source):
+        return ("named_instance_without_reference",)
+    return ()
+
+
 class AppServerContentAI:
     """Luna-backed content adapter over the server's AG-UI endpoint."""
 
@@ -305,7 +324,9 @@ class AppServerContentAI:
         terms = untranslated_terms(public_text)
         style_markers = artificial_style_markers(public_text)
         layout_issues = presentation_issues(rewrite.title, rewrite.body)
-        if terms or style_markers or layout_issues:
+        spec_issues = specialization_issues(text, public_text)
+        reference_issues = _reference_issues(text, rewrite.references)
+        if terms or style_markers or layout_issues or spec_issues or reference_issues:
             repaired_output = await self._complete(
                 _RUSSIAN_REPAIR_PROMPT,
                 {
@@ -315,6 +336,8 @@ class AppServerContentAI:
                     "untranslated_terms": list(terms),
                     "artificial_style_markers": list(style_markers),
                     "presentation_issues": list(layout_issues),
+                    "specialization_issues": list(spec_issues),
+                    "reference_issues": list(reference_issues),
                     "recent_published": story_index,
                     "recent_voice_examples": voice_examples,
                 },
@@ -330,11 +353,23 @@ class AppServerContentAI:
             repaired_text = (
                 f"{repaired.title}\n{repaired.body}" if repaired is not None else ""
             )
+            repaired_references = (
+                _references(
+                    repaired_output.references,
+                    text,
+                    repaired.title,
+                    repaired.body,
+                )
+                if repaired is not None
+                else ()
+            ) or rewrite.references
             if (
                 repaired is None
                 or untranslated_terms(repaired_text)
                 or artificial_style_markers(repaired_text)
                 or presentation_issues(repaired.title, repaired.body)
+                or specialization_issues(text, repaired_text)
+                or _reference_issues(text, repaired_references)
             ):
                 log.warning("Editorial repair did not pass language and style gates")
                 return None
@@ -344,13 +379,7 @@ class AppServerContentAI:
                 hashtag=repaired.hashtag or rewrite.hashtag,
                 infographic=rewrite.infographic,
                 references=(
-                    _references(
-                        repaired_output.references,
-                        text,
-                        repaired.title,
-                        repaired.body,
-                    )
-                    or rewrite.references
+                    repaired_references
                 ),
             )
         return FilterResult(
