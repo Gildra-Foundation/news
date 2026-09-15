@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +17,6 @@ from gildranews.domain.models import ResolvedWarcraftEntity, TelegramEmojiAsset
 log = logging.getLogger(__name__)
 
 SET_SOFT_LIMIT = 190
-TELEGRAM_SET_LIMIT = 200
 _USERNAME_RE = re.compile(r"[^a-z0-9_]+")
 _upload_lock = asyncio.Lock()
 
@@ -41,7 +39,9 @@ class TelegramEmojiRegistry:
         self.bot = bot
         self.owner_user_id = owner_user_id
         self.enabled = enabled
-        self.set_prefix = _USERNAME_RE.sub("_", set_prefix.lower()).strip("_")
+        self.set_prefix = re.sub(
+            r"_+", "_", _USERNAME_RE.sub("_", set_prefix.lower()),
+        ).strip("_") or "gildra_warcraft"
         self.daily_upload_limit = max(0, min(daily_upload_limit, 100))
         self.upload_timeout_seconds = max(1, min(upload_timeout_seconds, 60))
 
@@ -76,7 +76,15 @@ class TelegramEmojiRegistry:
             try:
                 async with asyncio.timeout(self.upload_timeout_seconds):
                     asset = await self._upload(entity, icon, fallback=fallback)
-            except (TimeoutError, OSError, TelegramAPIError, EmojiUploadError) as exc:
+            except (
+                AttributeError,
+                OSError,
+                RuntimeError,
+                TelegramAPIError,
+                TimeoutError,
+                TypeError,
+                ValueError,
+            ) as exc:
                 log.warning("Custom emoji upload failed for %s: %s", entity.key, exc)
                 await sqlite.mark_emoji_asset_failed(icon.sha256, str(exc))
                 failed = await sqlite.emoji_asset_by_hash(icon.sha256)
@@ -178,7 +186,9 @@ class TelegramEmojiRegistry:
         username = _USERNAME_RE.sub("_", (me.username or "bot").lower()).strip("_")
         scope = "core" if entity.kind in {"class", "specialization"} else entity.branch
         for index in range(1, 100):
-            name = f"{self.set_prefix}_{scope}_{index:02d}_by_{username}"[:64]
+            suffix = f"_{scope}_{index:02d}_by_{username}"
+            prefix = self.set_prefix[: 64 - len(suffix)].rstrip("_") or "gildra"
+            name = f"{prefix}{suffix}"
             sticker_set = await self._get_set(name)
             local_count = await sqlite.ready_emoji_count_in_set(name)
             remote_count = len(sticker_set.stickers) if sticker_set is not None else 0
@@ -212,6 +222,8 @@ def _set_title(branch: str, set_name: str) -> str:
     branch_title = {"core": "Core", "retail": "Retail", "classic": "Classic", "forever": "Forever"}.get(
         scope, scope.title(),
     )
+    if scope == "core" and number == "01":
+        return "Gildra Warcraft Core"
     return f"Gildra Warcraft {branch_title} {number}"[:64]
 
 
@@ -236,7 +248,3 @@ def pick_fallback(kind: str) -> str:
         "event": "📅",
     }
     return by_kind.get(kind, "⚔️")
-
-
-def limit_assets(assets: Sequence[TelegramEmojiAsset]) -> tuple[TelegramEmojiAsset, ...]:
-    return tuple(assets[:2])

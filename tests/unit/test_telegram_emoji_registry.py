@@ -142,3 +142,50 @@ async def test_registry_places_classes_in_core_set(monkeypatch, tmp_path) -> Non
         assert result.sticker_set_name == "gildra_warcraft_core_01_by_gildranews_bot"
     finally:
         await sqlite.close()
+
+
+@pytest.mark.asyncio
+async def test_registry_rolls_over_before_telegram_set_limit(monkeypatch, tmp_path) -> None:
+    await sqlite.close()
+    monkeypatch.setattr(sqlite, "DB_PATH", str(tmp_path / "newsbot.db"))
+    await sqlite.init()
+    bot = FakeBot()
+
+    async def count(name: str) -> int:
+        return 190 if "_retail_01_" in name else 0
+
+    monkeypatch.setattr(sqlite, "ready_emoji_count_in_set", count)
+    try:
+        result = await TelegramEmojiRegistry(
+            bot, owner_user_id=42, enabled=True,
+        ).get_or_create(_entity(), _icon(tmp_path), fallback="🔥")
+
+        assert result is not None
+        assert result.sticker_set_name == "gildra_warcraft_retail_02_by_gildranews_bot"
+    finally:
+        await sqlite.close()
+
+
+@pytest.mark.asyncio
+async def test_registry_records_unexpected_upload_failure(monkeypatch, tmp_path) -> None:
+    await sqlite.close()
+    monkeypatch.setattr(sqlite, "DB_PATH", str(tmp_path / "newsbot.db"))
+    await sqlite.init()
+    bot = FakeBot()
+
+    async def fail(**kwargs):
+        raise RuntimeError("unexpected adapter failure")
+
+    bot.create_new_sticker_set = fail
+    try:
+        result = await TelegramEmojiRegistry(
+            bot, owner_user_id=42, enabled=True,
+        ).get_or_create(_entity(), _icon(tmp_path), fallback="🔥")
+        row = await sqlite.emoji_asset_by_hash("a" * 64)
+
+        assert result is None
+        assert row is not None
+        assert row["status"] == "failed"
+        assert row["attempts"] == 1
+    finally:
+        await sqlite.close()
