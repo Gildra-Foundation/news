@@ -145,7 +145,9 @@ async def test_process_rss_item_publishes_without_source_attribution(monkeypatch
     assert result.status == "published"
     assert published["target_channel"] == "@gildrawow"
     assert "wowhead" not in published["text"].lower()
-    assert "https://" not in published["text"]
+    assert item.article_url not in published["text"]
+    assert "Оригинальный пост" not in published["text"]
+    assert 'href="https://t.me/gildrawow"' in published["text"]
     assert [kind for _path, kind in published["media_files"]] == ["photo", "video"]
     assert recorded == {
         "channel": "wowhead",

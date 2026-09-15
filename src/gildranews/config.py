@@ -126,6 +126,7 @@ class Config:
     emoji_max_new_per_day: int = 10
     emoji_upload_timeout_seconds: int = 15
     scrape_do_enabled: bool = False
+    subscribe_emoji_id: str = ""
 
 def load() -> Config:
     target = _required("TARGET_CHANNEL")
@@ -248,4 +249,5 @@ def load() -> Config:
             "EMOJI_UPLOAD_TIMEOUT_SECONDS", 15, minimum=1, maximum=60,
         ),
         scrape_do_enabled=scrape_do_enabled,
+        subscribe_emoji_id=os.getenv("SUBSCRIBE_EMOJI_ID", "").strip(),
     )

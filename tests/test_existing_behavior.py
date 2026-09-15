@@ -33,8 +33,43 @@ def test_post_formatter_escapes_content_and_uses_selected_hashtag() -> None:
     )
 
     assert result == (
-        "<b>OpenAI &lt;news&gt;</b>\n\nA &amp; B\n\n#новости@gildrawow"
+        "<b>OpenAI &lt;news&gt;</b>\n\nA &amp; B\n\n#новости@gildrawow\n\n"
+        '🛡️ <a href="https://t.me/gildrawow">Подписаться на Gildra</a>'
     )
+
+
+def test_post_formatter_ends_with_branded_subscription_custom_emoji() -> None:
+    result = tg_writer.format_post(
+        title="Новая броня",
+        body="Облики станут доступны всем классам.",
+        hashtag_key="новости",
+        subscribe_emoji_id="999",
+    )
+
+    assert result.endswith(
+        '<tg-emoji emoji-id="999">🛡️</tg-emoji> '
+        '<a href="https://t.me/gildrawow">Подписаться на Gildra</a>'
+    )
+
+
+def test_subscription_emoji_does_not_reduce_entity_emoji_limit() -> None:
+    assets = [
+        TelegramEmojiAsset(str(index), f"file-{index}", "set", "⚔️")
+        for index in range(1, 4)
+    ]
+
+    result = tg_writer.format_post(
+        title="Огненный шар усилят",
+        body="Урон заклинания вырастет.",
+        custom_emojis=assets,
+        subscribe_emoji_id="999",
+    )
+
+    assert result.count("<tg-emoji ") == 3
+    assert 'emoji-id="1"' in result
+    assert 'emoji-id="2"' in result
+    assert 'emoji-id="3"' not in result
+    assert 'emoji-id="999"' in result
 
 
 def test_post_formatter_uses_premium_emoji_when_available() -> None:

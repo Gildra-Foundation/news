@@ -47,7 +47,7 @@ def draft_tail_url(draft: dict) -> str | None:
     return None
 
 
-def format_draft_text(draft: dict) -> str:
+def format_draft_text(draft: dict, subscribe_emoji_id: str = "") -> str:
     original_url = draft["source_url"] if draft.get("include_original") else None
     emoji_map = emoji_store.load()
     override = emoji_store.detect_override(
@@ -64,16 +64,22 @@ def format_draft_text(draft: dict) -> str:
         hashtag_key=draft.get("hashtag") or "",
         inline_links=draft.get("inline_links") or (),
         custom_emojis=draft.get("custom_emojis") or (),
+        subscribe_emoji_id=subscribe_emoji_id,
     )
 
 
-async def send_preview(bot: Bot, chat_id: int, draft_id: int) -> None:
+async def send_preview(
+    bot: Bot,
+    chat_id: int,
+    draft_id: int,
+    subscribe_emoji_id: str = "",
+) -> None:
     draft = await db.get_draft(draft_id)
     if not draft:
         await bot.send_message(chat_id, "Черновик не найден.")
         return
 
-    text = format_draft_text(draft)
+    text = format_draft_text(draft, subscribe_emoji_id)
     keyboard = draft_keyboard(draft_id, include_original=draft.get("include_original", False))
     media = photo_argument(draft["image_url"])
     media_type = draft.get("media_type") or "photo"

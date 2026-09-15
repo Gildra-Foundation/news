@@ -170,6 +170,7 @@ async def process_post(
                 hashtag_key=filt.hashtag,
                 inline_links=inline_links,
                 custom_emojis=custom_emojis,
+                subscribe_emoji_id=cfg.subscribe_emoji_id,
             )
             target_msg_id = await tg_writer.publish(bot, cfg.target_channel, text, media)
         if target_msg_id:

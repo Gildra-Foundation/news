@@ -36,12 +36,14 @@ def test_loads_custom_emoji_limits(monkeypatch) -> None:
     monkeypatch.setenv("EMOJI_AUTOCREATE_ENABLED", "true")
     monkeypatch.setenv("EMOJI_MAX_NEW_PER_DAY", "7")
     monkeypatch.setenv("EMOJI_UPLOAD_TIMEOUT_SECONDS", "12")
+    monkeypatch.setenv("SUBSCRIBE_EMOJI_ID", "999")
 
     cfg = config.load()
 
     assert cfg.emoji_autocreate_enabled is True
     assert cfg.emoji_max_new_per_day == 7
     assert cfg.emoji_upload_timeout_seconds == 12
+    assert cfg.subscribe_emoji_id == "999"
 
 
 def test_scrape_do_image_search_requires_explicit_enable(monkeypatch) -> None:

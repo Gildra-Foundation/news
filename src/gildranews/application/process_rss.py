@@ -123,6 +123,7 @@ async def process_item(
         hashtag_key=analysis.hashtag,
         inline_links=inline_links,
         custom_emojis=custom_emojis,
+        subscribe_emoji_id=cfg.subscribe_emoji_id,
     )
 
     try:

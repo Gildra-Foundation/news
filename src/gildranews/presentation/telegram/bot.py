@@ -255,6 +255,7 @@ async def run_bot() -> None:
             hashtag_key=rewrite.hashtag,
             inline_links=enrichment.inline_links,
             custom_emojis=enrichment.emojis,
+            subscribe_emoji_id=cfg.subscribe_emoji_id,
         )
         with tempfile.TemporaryDirectory(prefix="newsbot_test_") as tmpdir:
             media_files = await tg_reader.download_post_media(tele_client, post, tmpdir)
@@ -439,7 +440,9 @@ async def run_bot() -> None:
                 screenshot_path = None
             if screenshot_path:
                 await db.set_draft_image(draft_id, screenshot_path)
-        await drafts.send_preview(bot, message.chat.id, draft_id)
+        await drafts.send_preview(
+            bot, message.chat.id, draft_id, cfg.subscribe_emoji_id,
+        )
 
     @dp.callback_query(F.data.startswith("pub:"))
     async def cb_publish(callback: CallbackQuery) -> None:
@@ -456,7 +459,7 @@ async def run_bot() -> None:
             await callback.answer("Черновик не найден или уже опубликован", show_alert=True)
             return
 
-        text = drafts.format_draft_text(draft)
+        text = drafts.format_draft_text(draft, cfg.subscribe_emoji_id)
         media = drafts.photo_argument(draft["image_url"])
         media_type = draft.get("media_type") or "photo"
         media_files = (
@@ -567,7 +570,7 @@ async def run_bot() -> None:
 
         # Перестроим текст и клавиатуру (auto-override эмодзи учтётся)
         draft["include_original"] = new_value
-        new_text = drafts.format_draft_text(draft)
+        new_text = drafts.format_draft_text(draft, cfg.subscribe_emoji_id)
         new_kb = drafts.draft_keyboard(draft_id, include_original=new_value)
         edited = False
         try:
@@ -583,7 +586,9 @@ async def run_bot() -> None:
             log.warning("orig toggle: edit failed, fallback to resend: %s", e)
         await callback.answer("Добавлено" if new_value else "Убрано")
         if not edited:
-            await drafts.send_preview(bot, callback.from_user.id, draft_id)
+            await drafts.send_preview(
+                bot, callback.from_user.id, draft_id, cfg.subscribe_emoji_id,
+            )
 
     # Хендлер для текста-инструкции на правку. Должен сработать ПЕРЕД дефолтными
     # обработчиками, но ПОСЛЕ команд и хендлеров ссылок (которые матчатся regexp-ом).
@@ -635,7 +640,9 @@ async def run_bot() -> None:
         await db.set_draft_enrichment(
             draft_id, enrichment.inline_links, enrichment.emojis,
         )
-        await drafts.send_preview(bot, message.chat.id, draft_id)
+        await drafts.send_preview(
+            bot, message.chat.id, draft_id, cfg.subscribe_emoji_id,
+        )
 
     @dp.message(Command("cancel"))
     async def cmd_cancel(message: Message) -> None:

@@ -38,6 +38,9 @@ HASHTAGS = {
     "дайджест": "#дайджест@gildrawow",
 }
 DEFAULT_HASHTAG_KEY = "полезное"
+SUBSCRIBE_URL = "https://t.me/gildrawow"
+SUBSCRIBE_LABEL = "Подписаться на Gildra"
+SUBSCRIBE_FALLBACK = "🛡️"
 _WOWHEAD_ENTITY_PATH_RE = re.compile(
     r"^/(?:classic/)?(?:"
     r"(?:achievement|item|npc|spell|transmog-set|zone)=\d+"
@@ -257,13 +260,15 @@ def format_post(
     hashtag_key: str = "",
     inline_links: Sequence[tuple[str, str]] | None = None,
     custom_emojis: Sequence[TelegramEmojiAsset] | None = None,
+    subscribe_emoji_id: str = "",
 ) -> str:
     """Финальный пост:
     <b>Title</b> [theme-emoji]\\n\\n
     Body\\n\\n
     [tail_url]\\n\\n
     [<u><i><a>Оригинальный пост</a></i></u>]\\n\\n
-    [#hashtag]
+    [#hashtag]\n\n
+    [brand emoji] Подписаться на Gildra
     """
     title = title.strip()
     body = body.strip()
@@ -323,6 +328,15 @@ def format_post(
     key = (hashtag_key or "").strip() or DEFAULT_HASHTAG_KEY
     tag = HASHTAGS.get(key) or HASHTAGS[DEFAULT_HASHTAG_KEY]
     blocks.append(tag)
+    subscribe_icon = SUBSCRIBE_FALLBACK
+    if subscribe_emoji_id.isdigit():
+        subscribe_icon = (
+            f'<tg-emoji emoji-id="{subscribe_emoji_id}">'
+            f"{SUBSCRIBE_FALLBACK}</tg-emoji>"
+        )
+    blocks.append(
+        f'{subscribe_icon} <a href="{SUBSCRIBE_URL}">{SUBSCRIBE_LABEL}</a>'
+    )
 
     return "\n\n".join(blocks)
 
