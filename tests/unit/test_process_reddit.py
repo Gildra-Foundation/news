@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from gildranews.adapters.sources.reddit import RedditTopic
@@ -27,6 +29,9 @@ async def test_daily_reddit_run_asks_ai_for_best_topics_and_publishes_one(
         return topics[subreddit]
 
     async def process_item(**kwargs):
+        assert kwargs["quota_source"] == "reddit"
+        assert kwargs["quota_day"].isoformat() == "2026-09-15"
+        assert kwargs["quota_limit"] == 2
         processed.append((kwargs["item"].title, kwargs["content_kind"]))
         return process_reddit.ProcessResult(
             "published",
@@ -54,7 +59,10 @@ async def test_daily_reddit_run_asks_ai_for_best_topics_and_publishes_one(
     )
 
     result = await process_reddit.run_once(
-        bot=object(), cfg=cfg, content_ai=object(),
+        bot=object(),
+        cfg=cfg,
+        content_ai=object(),
+        now=datetime(2026, 9, 15, 8, 0, tzinfo=UTC),
     )
 
     assert processed == [("Important discovery", "reddit_topic")]

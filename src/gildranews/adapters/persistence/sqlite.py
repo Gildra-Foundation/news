@@ -43,9 +43,39 @@ CREATE TABLE IF NOT EXISTS published_posts (
     message_id INTEGER NOT NULL,
     title TEXT NOT NULL,
     body TEXT NOT NULL,
-    posted_at TEXT DEFAULT CURRENT_TIMESTAMP
+    posted_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    story_key TEXT,
+    revision_key TEXT,
+    fingerprint_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_published_posted_at ON published_posts(posted_at);
+CREATE TABLE IF NOT EXISTS publication_candidates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    external_id INTEGER NOT NULL,
+    story_key TEXT NOT NULL,
+    revision_key TEXT NOT NULL,
+    fingerprint_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'reserved',
+    quota_source TEXT,
+    quota_day TEXT,
+    failure TEXT,
+    target_message_id INTEGER,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_publication_candidates_story
+    ON publication_candidates(story_key, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_publication_candidates_active_revision
+    ON publication_candidates(story_key, revision_key)
+    WHERE status IN ('reserved', 'published');
+CREATE TABLE IF NOT EXISTS daily_source_usage (
+    source TEXT NOT NULL,
+    day_utc TEXT NOT NULL,
+    publication_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (source, day_utc)
+);
 CREATE TABLE IF NOT EXISTS warcraft_entities (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     branch TEXT NOT NULL,
@@ -173,6 +203,22 @@ async def init() -> None:
         pcols = {row[1] async for row in cur}
     if "target_message_id" not in pcols:
         await db.execute("ALTER TABLE published_posts ADD COLUMN target_message_id INTEGER")
+    if "story_key" not in pcols:
+        await db.execute("ALTER TABLE published_posts ADD COLUMN story_key TEXT")
+    if "revision_key" not in pcols:
+        await db.execute("ALTER TABLE published_posts ADD COLUMN revision_key TEXT")
+    if "fingerprint_json" not in pcols:
+        await db.execute("ALTER TABLE published_posts ADD COLUMN fingerprint_json TEXT")
+    await db.execute(
+        """INSERT OR IGNORE INTO daily_source_usage(source, day_utc, publication_count)
+           SELECT 'reddit', date(posted_at), COUNT(*) FROM published_posts
+           WHERE channel LIKE 'reddit:%' GROUP BY date(posted_at)"""
+    )
+    await db.execute(
+        """INSERT OR IGNORE INTO daily_source_usage(source, day_utc, publication_count)
+           SELECT 'x', date(posted_at), COUNT(*) FROM published_posts
+           WHERE channel = 'x' GROUP BY date(posted_at)"""
+    )
     await db.commit()
 
 

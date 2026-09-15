@@ -173,6 +173,7 @@ class FilterResult:
     hashtag: str = ""
     infographic: InfographicSpec | None = None
     references: tuple[EntityReference, ...] = ()
+    fingerprint: EventFingerprint | None = None
 
 
 ProcessStatus = Literal[
@@ -182,6 +183,7 @@ ProcessStatus = Literal[
     "published",
     "publish_failed",
     "ai_error",
+    "daily_limit",
     "error",
 ]
 

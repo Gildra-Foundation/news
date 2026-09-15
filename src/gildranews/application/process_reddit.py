@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 
 from aiogram import Bot
 
@@ -24,9 +25,11 @@ async def run_once(
     cfg: Config,
     content_ai: ContentAI,
     on_result: ResultCallback | None = None,
+    now: datetime | None = None,
 ) -> dict[str, int | str | None]:
     if not cfg.reddit_enabled:
         return {"fetched": 0, "reviewed": 0, "published": 0, "error": None}
+    current_time = (now or datetime.now(UTC)).astimezone(UTC)
 
     candidates: dict[tuple[str, str], reddit_source.RedditTopic] = {}
     errors: list[str] = []
@@ -60,6 +63,9 @@ async def run_once(
             item=topic.as_feed_item(),
             content_ai=content_ai,
             content_kind="reddit_topic",
+            quota_source="reddit",
+            quota_day=current_time.date(),
+            quota_limit=cfg.reddit_max_posts_per_day,
         )
         if result.status != "duplicate":
             reviewed += 1
@@ -70,7 +76,7 @@ async def run_once(
                     log.exception("Reddit on_result callback failed")
         if result.status == "published":
             published += 1
-        elif result.status == "ai_error":
+        elif result.status == "ai_error" or result.status == "daily_limit":
             break
 
     return {

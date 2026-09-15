@@ -4,7 +4,7 @@ import asyncio
 import logging
 import tempfile
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from aiogram import Bot
@@ -12,6 +12,7 @@ from aiogram import Bot
 from gildranews.adapters import media as media_downloader
 from gildranews.adapters.emoji import catalog as emoji_store
 from gildranews.adapters.media import scrape_do_images
+from gildranews.adapters.persistence import publication_guard
 from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.publishing import telegram as tg_writer
 from gildranews.adapters.references import wowhead as wowhead_references
@@ -20,7 +21,7 @@ from gildranews.adapters.sources import rss as rss_source
 from gildranews.application import warcraft_enrichment
 from gildranews.application.ports import ContentAI
 from gildranews.config import Config
-from gildranews.domain.models import ProcessResult
+from gildranews.domain.models import EventFingerprint, FilterResult, ProcessResult
 
 log = logging.getLogger(__name__)
 MAX_AI_INPUT_CHARS = 12_000
@@ -31,6 +32,23 @@ RSS_MEDIA_HOSTS = {
 ResultCallback = Callable[[ProcessResult], Awaitable[None]]
 
 
+def _publication_fingerprint(analysis: FilterResult) -> EventFingerprint:
+    if analysis.fingerprint is not None:
+        return analysis.fingerprint
+    primary = next(
+        (reference for reference in analysis.references if reference.role == "primary"),
+        analysis.references[0] if analysis.references else None,
+    )
+    return EventFingerprint(
+        game_branch=primary.branch if primary is not None else "retail",
+        version="",
+        subject=analysis.title,
+        action="публикация новости",
+        status="",
+        effective_date="",
+    )
+
+
 async def process_item(
     *,
     bot: Bot,
@@ -38,6 +56,9 @@ async def process_item(
     item: rss_source.RSSItem,
     content_ai: ContentAI,
     content_kind: str = "news",
+    quota_source: str | None = None,
+    quota_day: date | None = None,
+    quota_limit: int | None = None,
 ) -> ProcessResult:
     if not await db.claim_message(item.source, item.external_id):
         return ProcessResult(
@@ -128,6 +149,37 @@ async def process_item(
         custom_emojis=custom_emojis,
         subscribe_emoji_id=cfg.subscribe_emoji_id,
     )
+
+    try:
+        reservation = await publication_guard.reserve_publication(
+            item.source,
+            item.external_id,
+            _publication_fingerprint(analysis),
+            quota_source=quota_source,
+            quota_day=quota_day,
+            quota_limit=quota_limit,
+        )
+    except Exception as exc:
+        log.exception("Publication reservation failed for %s/%s", item.source, item.external_id)
+        await db.release_claim(item.source, item.external_id)
+        return ProcessResult(
+            "error", item.source, item.external_id,
+            reason=f"{type(exc).__name__}: {exc}", title=analysis.title,
+            source_url=item.article_url,
+        )
+    if not reservation.reserved:
+        if reservation.quota_exhausted:
+            await db.release_claim(item.source, item.external_id)
+            return ProcessResult(
+                "daily_limit", item.source, item.external_id,
+                reason=reservation.reason, title=analysis.title,
+                source_url=item.article_url,
+            )
+        return ProcessResult(
+            "duplicate", item.source, item.external_id,
+            reason=reservation.reason, title=analysis.title,
+            source_url=item.article_url,
+        )
 
     try:
         with tempfile.TemporaryDirectory(prefix="gildranews_rss_") as tmpdir:
@@ -229,6 +281,7 @@ async def process_item(
             )
     except Exception as exc:
         log.exception("RSS publish failed for %s/%s", item.source, item.external_id)
+        await publication_guard.fail_publication(reservation.reservation_id, str(exc))
         await db.release_claim(item.source, item.external_id)
         return ProcessResult(
             "error", item.source, item.external_id,
@@ -237,17 +290,21 @@ async def process_item(
         )
 
     if target_message_id is None:
+        await publication_guard.fail_publication(
+            reservation.reservation_id, "Telegram API отказал в публикации",
+        )
         await db.release_claim(item.source, item.external_id)
         return ProcessResult(
             "publish_failed", item.source, item.external_id,
             reason="Telegram API отказал в публикации", title=analysis.title,
             source_url=item.article_url,
         )
-    await db.record_published(
-        item.source,
-        item.external_id,
-        analysis.title,
-        analysis.body,
+    await publication_guard.complete_publication(
+        reservation.reservation_id,
+        channel=item.source,
+        message_id=item.external_id,
+        title=analysis.title,
+        body=analysis.body,
         target_message_id=target_message_id,
     )
     return ProcessResult(

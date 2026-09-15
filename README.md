@@ -355,6 +355,8 @@ GETXAPI_KEY=...
 GETXAPI_ENABLED=false
 REDDITAPIS_KEY=...
 REDDITAPIS_ENABLED=false
+REDDIT_MAX_POSTS_PER_DAY=2
+X_MAX_POSTS_PER_DAY=2
 SCRAPE_DO_TOKEN=...
 SCRAPE_DO_ENABLED=false
 
@@ -373,6 +375,10 @@ SUBSCRIBE_EMOJI_ID=5280756831252167912
 Реестр игровых сущностей, хэшей изображений, очереди и `custom_emoji_id`
 хранится в таблицах `warcraft_entities` и `telegram_emoji_assets` базы
 `data/newsbot.db`; ручной файл `data/emojis.json` для этого конвейера не нужен.
+
+Отпечатки сюжетов и суточные квоты Reddit/X также хранятся в SQLite. Один и
+тот же сюжет из разных источников резервируется атомарно, а перезапуск бота не
+обнуляет лимит в два поста Reddit и два поста X за сутки.
 
 ---
 

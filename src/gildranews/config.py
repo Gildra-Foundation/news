@@ -116,10 +116,12 @@ class Config:
     social_discovery_hours_utc: tuple[int, ...] = (8, 18)
     reddit_candidates_per_subreddit: int = 15
     reddit_max_posts_per_run: int = 1
+    reddit_max_posts_per_day: int = 2
     x_enabled: bool = False
     x_api_key: str = ""
     x_search_query: str = DEFAULT_X_SEARCH_QUERY
     x_max_posts_per_run: int = 1
+    x_max_posts_per_day: int = 2
     emoji_autocreate_enabled: bool = False
     emoji_set_prefix: str = "gildra_warcraft"
     emoji_icon_dir: str = "data/emoji_icons"
@@ -227,11 +229,17 @@ def load() -> Config:
         reddit_max_posts_per_run=_bounded_int(
             "REDDIT_MAX_POSTS_PER_RUN", 1, minimum=1, maximum=2,
         ),
+        reddit_max_posts_per_day=_bounded_int(
+            "REDDIT_MAX_POSTS_PER_DAY", 2, minimum=1, maximum=10,
+        ),
         x_enabled=x_enabled,
         x_api_key=x_api_key,
         x_search_query=x_search_query,
         x_max_posts_per_run=_bounded_int(
             "X_MAX_POSTS_PER_RUN", 1, minimum=1, maximum=2,
+        ),
+        x_max_posts_per_day=_bounded_int(
+            "X_MAX_POSTS_PER_DAY", 2, minimum=1, maximum=10,
         ),
         emoji_autocreate_enabled=_bool("EMOJI_AUTOCREATE_ENABLED"),
         emoji_set_prefix=(

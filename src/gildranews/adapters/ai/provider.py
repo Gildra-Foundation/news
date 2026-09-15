@@ -23,6 +23,7 @@ from gildranews.application.translation_qa import (
 )
 from gildranews.domain.models import (
     EntityReference,
+    EventFingerprint,
     FilterResult,
     InfographicFact,
     InfographicSpec,
@@ -64,8 +65,9 @@ _JSON_SUFFIX = """
 _FILTER_JSON_SUFFIX = """
 
 Верни только JSON без Markdown и пояснений:
-{"is_news":true,"reason":"...","title":"...","body":"...","emoji_theme":"...","hashtag":"...","infographic":null,"references":[]}
+{"is_news":true,"reason":"...","title":"...","body":"...","emoji_theme":"...","hashtag":"...","infographic":null,"references":[],"fingerprint":{"game_branch":"retail","version":"12.2.5","subject":"стабильное название события","action":"ослабить босса","status":"announced","effective_date":"","scope":[],"material_facts":[]}}
 infographic может быть объектом с полями kicker, title, facts (2–4 объектов value/label), source="". Каждое value должно дословно встречаться во входном post. Для отклонённой новости infographic=null. Не добавляй источник, URL или название издания в title/body.
+fingerprint обязателен для принятой новости. Он описывает само событие, а не статью: game_branch=retail|classic|forever; version — версия игры; subject — короткий устойчивый объект изменения; action — короткое действие; status — announced|testing|scheduled|live|cancelled или пусто; effective_date — точная дата либо пусто; scope и material_facts содержат только существенные факты из post. Для одного события в разных источниках выбирай одинаковые subject и action. Дополнительные примеры и пересказ не являются новым фактом.
 references — не более трёх объектов {"label":"точный текст из title/body","query":"точное исходное английское имя из post","kind":"class|specialization|spell|talent|item|cosmetic|transmog_set|mount|pet|achievement|raid|dungeon|boss|creature|faction|profession|event|expansion","branch":"retail|classic|forever","role":"primary|secondary"}. Название дополнения сохраняй на английском и помечай kind=expansion. URL, ID и изображения не придумывай: их найдёт бот. Главную изменяемую сущность пометь primary, остальные secondary. Для остальных случаев references=[].
 В рейтинге специализаций включи в references две самые важные специализации с kind=specialization для значков и названный рейд с kind=raid для ссылки. Для специализаций используй точные английские названия из post; классы отдельными references не добавляй.
 Если материал относится к WoW: Forever, обязательно включи reference с label="WoW: Forever", query="WoW: Forever", kind="expansion", branch="forever", role="primary".
@@ -117,6 +119,17 @@ class _ReferenceOutput(BaseModel):
     role: WarcraftEntityRole = "secondary"
 
 
+class _FingerprintOutput(BaseModel):
+    game_branch: WarcraftBranch = "retail"
+    version: str = ""
+    subject: str
+    action: str
+    status: str = ""
+    effective_date: str = ""
+    scope: list[str] = Field(default_factory=list, max_length=12)
+    material_facts: list[str] = Field(default_factory=list, max_length=12)
+
+
 class _RewriteOutput(BaseModel):
     title: str
     body: str
@@ -129,6 +142,7 @@ class _FilterOutput(_RewriteOutput):
     is_news: bool
     reason: str
     emoji_theme: str = ""
+    fingerprint: _FingerprintOutput | None = None
 
 
 class _DigestItem(BaseModel):
@@ -208,6 +222,23 @@ def _infographic(value: _InfographicOutput | None, source: str) -> InfographicSp
             for fact in value.facts
         ),
         source="",
+    )
+
+
+def _event_fingerprint(value: _FingerprintOutput | None) -> EventFingerprint | None:
+    if value is None or not value.subject.strip() or not value.action.strip():
+        return None
+    return EventFingerprint(
+        game_branch=value.game_branch,
+        version=value.version.strip(),
+        subject=value.subject.strip(),
+        action=value.action.strip(),
+        status=value.status.strip(),
+        effective_date=value.effective_date.strip(),
+        scope=tuple(item.strip() for item in value.scope if item.strip()),
+        material_facts=tuple(
+            item.strip() for item in value.material_facts if item.strip()
+        ),
     )
 
 
@@ -355,6 +386,10 @@ class AppServerContentAI:
             return None
         if not output.is_news:
             return FilterResult(is_news=False, reason=output.reason.strip())
+        fingerprint = _event_fingerprint(output.fingerprint)
+        if fingerprint is None:
+            log.warning("Luna accepted a story without a valid event fingerprint")
+            return None
         rewrite = await self._finish_rewrite(text, output)
         if rewrite is None:
             return None
@@ -433,6 +468,7 @@ class AppServerContentAI:
             hashtag=rewrite.hashtag,
             infographic=rewrite.infographic,
             references=rewrite.references,
+            fingerprint=fingerprint,
         )
 
     async def _rewrite_with_prompt(

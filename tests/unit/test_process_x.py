@@ -24,6 +24,9 @@ async def test_x_run_reviews_top_topics_and_publishes_one(monkeypatch) -> None:
         return topics
 
     async def process_item(**kwargs):
+        assert kwargs["quota_source"] == "x"
+        assert kwargs["quota_day"].isoformat() == "2026-09-14"
+        assert kwargs["quota_limit"] == 2
         processed.append((kwargs["item"].content, kwargs["content_kind"]))
         return process_x.ProcessResult(
             "published",

@@ -78,7 +78,19 @@ class _StubAppServer:
     async def complete(self, system: str, user: str) -> str:
         self.system = system
         self.user = user
-        return json.dumps(self.response, ensure_ascii=False)
+        response = dict(self.response)
+        if response.get("is_news") is True and "fingerprint" not in response:
+            response["fingerprint"] = {
+                "game_branch": "retail",
+                "version": "",
+                "subject": response.get("title", "событие"),
+                "action": "изменить",
+                "status": "announced",
+                "effective_date": "",
+                "scope": [],
+                "material_facts": [],
+            }
+        return json.dumps(response, ensure_ascii=False)
 
     async def aclose(self) -> None:
         return None
@@ -92,7 +104,43 @@ class _SequenceAppServer(_StubAppServer):
     async def complete(self, system: str, user: str) -> str:
         self.system = system
         self.user = user
-        return json.dumps(next(self.responses), ensure_ascii=False)
+        response = dict(next(self.responses))
+        if response.get("is_news") is True and "fingerprint" not in response:
+            response["fingerprint"] = {
+                "game_branch": "retail",
+                "version": "",
+                "subject": response.get("title", "событие"),
+                "action": "изменить",
+                "status": "announced",
+                "effective_date": "",
+                "scope": [],
+                "material_facts": [],
+            }
+        return json.dumps(response, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_luna_rejects_accepted_news_without_event_fingerprint() -> None:
+    class _RawStub:
+        async def complete(self, system: str, user: str) -> str:
+            return json.dumps(
+                {
+                    "is_news": True,
+                    "reason": "Новость",
+                    "title": "Изменение рейда",
+                    "body": "Босса ослабят.",
+                },
+                ensure_ascii=False,
+            )
+
+        async def aclose(self) -> None:
+            return None
+
+    result = await AppServerContentAI(_RawStub()).filter_and_rewrite(
+        "The raid boss will be nerfed", [], [],
+    )
+
+    assert result is None
 
 
 @pytest.mark.asyncio
@@ -148,6 +196,16 @@ async def test_luna_news_analysis_uses_full_wow_context_and_hides_source() -> No
             "title": "Blizzard меняет механику миникарты",
             "body": "Хотфикс ограничит подсказки аддонов внутри подземелий.",
             "hashtag": "новости",
+            "fingerprint": {
+                "game_branch": "retail",
+                "version": "12.2.5",
+                "subject": "подсказки аддонов на миникарте",
+                "action": "ограничить подсказки",
+                "status": "announced",
+                "effective_date": "",
+                "scope": ["подземелья"],
+                "material_facts": [],
+            },
         },
     )
     processor = AppServerContentAI(app_server)
@@ -164,6 +222,9 @@ async def test_luna_news_analysis_uses_full_wow_context_and_hides_source() -> No
 
     payload = json.loads(app_server.user)
     assert result is not None
+    assert result.fingerprint is not None
+    assert result.fingerprint.version == "12.2.5"
+    assert result.fingerprint.subject == "подсказки аддонов на миникарте"
     assert len(payload["post"]) > 3_000
     assert "final fact" in payload["post"]
     assert payload["recent_published"] == recent_posts

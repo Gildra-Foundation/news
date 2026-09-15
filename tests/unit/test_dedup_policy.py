@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from gildranews.application.dedup import compare_fingerprints
+from gildranews.domain.dedup import compare_fingerprints
 from gildranews.domain.models import EventFingerprint
 
 

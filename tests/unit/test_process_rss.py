@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from gildranews.adapters.persistence.publication_guard import PublicationReservation
 from gildranews.adapters.sources.rss import RSSItem
 from gildranews.application import process_rss
 from gildranews.application.warcraft_enrichment import WarcraftEnrichment
@@ -107,7 +108,12 @@ async def test_process_rss_item_publishes_without_source_attribution(monkeypatch
         assert relevance_text == "Minimap Addon Tech Will Be Disabled"
         return "https://wow.zamimg.com/image.jpg", "https://wow.zamimg.com/clip.mp4"
 
-    async def record_published(channel, message_id, title, body, target_message_id) -> None:
+    async def reserve_publication(*_args, **_kwargs) -> PublicationReservation:
+        return PublicationReservation(True, 1)
+
+    async def complete_publication(
+        _reservation_id, *, channel, message_id, title, body, target_message_id,
+    ) -> None:
         recorded.update(
             channel=channel,
             message_id=message_id,
@@ -118,7 +124,8 @@ async def test_process_rss_item_publishes_without_source_attribution(monkeypatch
 
     monkeypatch.setattr(process_rss.db, "claim_message", claim_message)
     monkeypatch.setattr(process_rss.db, "recent_published_context", recent_context)
-    monkeypatch.setattr(process_rss.db, "record_published", record_published)
+    monkeypatch.setattr(process_rss.publication_guard, "reserve_publication", reserve_publication)
+    monkeypatch.setattr(process_rss.publication_guard, "complete_publication", complete_publication)
     monkeypatch.setattr(process_rss.emoji_store, "load", dict)
     monkeypatch.setattr(process_rss.emoji_store, "themes_for_prompt", lambda _emap: [])
     monkeypatch.setattr(process_rss.tg_writer, "publish", publish)
@@ -214,12 +221,16 @@ async def test_icy_veins_uses_article_raid_cover_instead_of_infographic(
             emojis=(TelegramEmojiAsset("123", "file", "set", "🏰"),),
         )
 
-    async def record_published(*args, **kwargs) -> None:
+    async def reserve_publication(*_args, **_kwargs) -> PublicationReservation:
+        return PublicationReservation(True, 1)
+
+    async def complete_publication(*args, **kwargs) -> None:
         return None
 
     monkeypatch.setattr(process_rss.db, "claim_message", claim_message)
     monkeypatch.setattr(process_rss.db, "recent_published_context", recent_context)
-    monkeypatch.setattr(process_rss.db, "record_published", record_published)
+    monkeypatch.setattr(process_rss.publication_guard, "reserve_publication", reserve_publication)
+    monkeypatch.setattr(process_rss.publication_guard, "complete_publication", complete_publication)
     monkeypatch.setattr(process_rss.emoji_store, "load", dict)
     monkeypatch.setattr(process_rss.emoji_store, "themes_for_prompt", lambda _emap: [])
     monkeypatch.setattr(process_rss.rss_source, "fetch_article_media", fetch_article_media)
@@ -308,12 +319,16 @@ async def test_scrape_do_finds_entity_image_before_infographic_fallback(
         published.update(text=text, media_files=media_files, table_rows=table_rows)
         return 89
 
-    async def record_published(*_args, **_kwargs) -> None:
+    async def reserve_publication(*_args, **_kwargs) -> PublicationReservation:
+        return PublicationReservation(True, 1)
+
+    async def complete_publication(*_args, **_kwargs) -> None:
         return None
 
     monkeypatch.setattr(process_rss.db, "claim_message", claim_message)
     monkeypatch.setattr(process_rss.db, "recent_published_context", recent_context)
-    monkeypatch.setattr(process_rss.db, "record_published", record_published)
+    monkeypatch.setattr(process_rss.publication_guard, "reserve_publication", reserve_publication)
+    monkeypatch.setattr(process_rss.publication_guard, "complete_publication", complete_publication)
     monkeypatch.setattr(process_rss.emoji_store, "load", dict)
     monkeypatch.setattr(process_rss.emoji_store, "themes_for_prompt", lambda _emap: [])
     monkeypatch.setattr(process_rss.warcraft_enrichment, "enrich", enrich)

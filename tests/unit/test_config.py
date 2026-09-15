@@ -78,9 +78,11 @@ def test_load_enables_daily_reddit_topics_with_existing_api_key(monkeypatch) -> 
     assert cfg.reddit_subreddits == ("worldofwarcraft", "competitivewow")
     assert cfg.social_discovery_hours_utc == (8, 18)
     assert cfg.reddit_max_posts_per_run == 1
+    assert cfg.reddit_max_posts_per_day == 2
     assert cfg.x_enabled is True
     assert cfg.x_api_key == "x-secret"
     assert cfg.x_max_posts_per_run == 1
+    assert cfg.x_max_posts_per_day == 2
 
 
 def test_enabled_reddit_topics_require_api_key(monkeypatch) -> None:

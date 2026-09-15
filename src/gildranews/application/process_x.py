@@ -61,6 +61,9 @@ async def run_once(
             item=topic.as_feed_item(),
             content_ai=content_ai,
             content_kind="x_topic",
+            quota_source="x",
+            quota_day=current_time.date(),
+            quota_limit=cfg.x_max_posts_per_day,
         )
         if result.status != "duplicate":
             reviewed += 1
@@ -71,7 +74,7 @@ async def run_once(
                     log.exception("X on_result callback failed")
         if result.status == "published":
             published += 1
-        elif result.status == "ai_error":
+        elif result.status == "ai_error" or result.status == "daily_limit":
             break
 
     return {"fetched": len(ranked), "reviewed": reviewed, "published": published, "error": None}
