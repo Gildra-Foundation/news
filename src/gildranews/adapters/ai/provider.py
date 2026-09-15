@@ -19,6 +19,7 @@ from gildranews.application.translation_qa import (
     normalize_wow_expansion_names,
     presentation_issues,
     specialization_issues,
+    split_dense_paragraphs,
     untranslated_terms,
 )
 from gildranews.domain.models import (
@@ -356,6 +357,7 @@ class AppServerContentAI:
             )
             if check_translation(before_editor, f"{title}\n\n{edited_body}").ready_for_editor:
                 body = edited_body
+        body = split_dense_paragraphs(body)
         return Rewrite(
             title=title,
             body=body,

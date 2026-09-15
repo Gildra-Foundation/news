@@ -193,6 +193,31 @@ def artificial_style_markers(text: str) -> tuple[str, ...]:
     return tuple(match.group(0).casefold() for match in _ARTIFICIAL_STYLE_RE.finditer(text))
 
 
+def split_dense_paragraphs(body: str, *, limit: int = 300) -> str:
+    """Split dense paragraphs at sentence boundaries without changing their text."""
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", body) if part.strip()]
+    result: list[str] = []
+    for paragraph in paragraphs:
+        if len(paragraph) <= limit:
+            result.append(paragraph)
+            continue
+        sentences = [match.group(0).strip() for match in _SENTENCE_RE.finditer(paragraph)]
+        if not sentences or any(len(sentence) > limit for sentence in sentences):
+            result.append(paragraph)
+            continue
+        chunk = ""
+        for sentence in sentences:
+            candidate = f"{chunk} {sentence}".strip()
+            if chunk and len(candidate) > limit:
+                result.append(chunk)
+                chunk = sentence
+            else:
+                chunk = candidate
+        if chunk:
+            result.append(chunk)
+    return "\n\n".join(result)
+
+
 def presentation_issues(title: str, body: str) -> tuple[str, ...]:
     """Return high-confidence layout problems that warrant one repair pass."""
     issues: list[str] = []

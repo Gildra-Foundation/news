@@ -7,6 +7,7 @@ import pytest
 
 from gildranews.adapters.ai.app_server import AppServerClient, AppServerError, parse_agui_sse
 from gildranews.adapters.ai.provider import AppServerContentAI
+from gildranews.application.translation_qa import presentation_issues
 
 
 def _event(payload: dict) -> str:
@@ -316,6 +317,41 @@ async def test_luna_repairs_dense_presentation_before_publication() -> None:
 
     assert result is not None
     assert result.body == "Теперь игроки будут получать дополнительную монету раз в день."
+
+
+@pytest.mark.asyncio
+async def test_luna_splits_a_valid_repair_into_readable_paragraphs() -> None:
+    repaired_body = (
+        "Событие уже началось и предлагает несколько способов получить награды. "
+        "Игроки могут пройти доступные подземелья и выполнить еженедельное задание. "
+        "За первое прохождение персонаж получит дополнительную награду события. "
+        "Повторные прохождения тоже принесут валюту для покупки полезных предметов. "
+        "Все условия действуют до следующего еженедельного сброса игровых миров."
+    )
+    app_server = _SequenceAppServer(
+        [
+            {
+                "is_news": True,
+                "reason": "Событие началось",
+                "title": "Началось еженедельное событие",
+                "body": "Важно отметить, что событие уже началось.",
+                "hashtag": "новости",
+            },
+            {
+                "title": "Началось еженедельное событие",
+                "body": repaired_body,
+                "hashtag": "новости",
+            },
+        ],
+    )
+
+    result = await AppServerContentAI(app_server).filter_and_rewrite(
+        "The weekly event is now live and offers several rewards.", [], [],
+    )
+
+    assert result is not None
+    assert "\n\n" in result.body
+    assert presentation_issues(result.title, result.body) == ()
 
 
 @pytest.mark.asyncio

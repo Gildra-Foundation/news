@@ -13,6 +13,7 @@ def test_load_allows_bot_api_mode_without_telethon_credentials(monkeypatch) -> N
     monkeypatch.delenv("TG_API_HASH", raising=False)
     monkeypatch.delenv("MTPROTO_PUBLISHER_ENABLED", raising=False)
     monkeypatch.delenv("EMOJI_AUTOCREATE_ENABLED", raising=False)
+    monkeypatch.delenv("EDITOR_URL", raising=False)
 
     cfg = config.load()
 
@@ -27,6 +28,7 @@ def test_load_allows_bot_api_mode_without_telethon_credentials(monkeypatch) -> N
     )
     assert cfg.emoji_autocreate_enabled is False
     assert cfg.emoji_max_new_per_day == 10
+    assert cfg.editor_url == ""
 
 
 def test_loads_custom_emoji_limits(monkeypatch) -> None:

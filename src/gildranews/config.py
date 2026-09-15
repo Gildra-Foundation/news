@@ -223,9 +223,7 @@ def load() -> Config:
             os.getenv("APP_SERVER_REASONING_EFFORT", "xhigh").strip() or "xhigh"
         ),
         ai_timeout_seconds=_int("AI_TIMEOUT_SECONDS", 240),
-        editor_url=os.getenv(
-            "EDITOR_URL", "http://editor-gateway:8080/v2/edit",
-        ).strip(),
+        editor_url=os.getenv("EDITOR_URL", "").strip(),
         editor_token=os.getenv("EDITOR_TOKEN", "").strip(),
         dedup_context_hours=_bounded_int(
             "DEDUP_CONTEXT_HOURS", 48, minimum=1, maximum=168,
