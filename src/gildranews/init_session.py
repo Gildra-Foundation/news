@@ -9,7 +9,9 @@
 from __future__ import annotations
 
 import asyncio
+import getpass
 import os
+import sys
 
 from telethon import TelegramClient
 
@@ -19,14 +21,25 @@ from gildranews.config import load
 
 async def main() -> None:
     cfg = load()
-    if not (cfg.telegram_reader_enabled or cfg.mtproto_publisher_enabled):
+    complete_2fa = "--complete-2fa" in sys.argv[1:]
+    if not (
+        cfg.telegram_reader_enabled
+        or cfg.mtproto_publisher_enabled
+        or complete_2fa
+    ):
         raise RuntimeError(
             "Для MTProto задайте MTPROTO_PUBLISHER_ENABLED=true либо "
             "TELEGRAM_READER_ENABLED=true"
         )
     os.makedirs("data", exist_ok=True)
     client = TelegramClient(SESSION_NAME, cfg.tg_api_id, cfg.tg_api_hash)
-    await client.start()
+    if complete_2fa:
+        await client.connect()
+        if not await client.is_user_authorized():
+            password = getpass.getpass("Облачный пароль Telegram: ")
+            await client.sign_in(password=password)
+    else:
+        await client.start()
     me = await client.get_me()
     print(f"OK: вошли как {me.first_name} (@{me.username}), id={me.id}")
     print(f"Сессия сохранена в {SESSION_NAME}.session")
