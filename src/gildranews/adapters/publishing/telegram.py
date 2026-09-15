@@ -593,8 +593,33 @@ async def publish(
                 table_rows,
             )
             if message_id is not None and _CUSTOM_EMOJI_RE.search(current_text):
+                restored = False
+                detail = "MTProto Premium session is not configured"
+                if _mtproto_client is not None:
+                    try:
+                        rich_html = build_rich_message(
+                            current_text,
+                            media_files,
+                            table_rows=table_rows,
+                        )["html"]
+                        restored = await mtproto.restore_rich_message_custom_emojis(
+                            _mtproto_client,
+                            target_channel,
+                            message_id,
+                            rich_html,
+                            media_files,
+                        )
+                        if not restored:
+                            detail = "Published message is not a Rich Message"
+                    except Exception as error:
+                        detail = f"MTProto Rich Message edit failed: {type(error).__name__}"
+                        log.warning(detail, exc_info=True)
                 try:
-                    await db.set_service_state("fragment_integration", "healthy", "")
+                    await db.set_service_state(
+                        "fragment_integration",
+                        "healthy" if restored else "faulty",
+                        "" if restored else detail,
+                    )
                 except Exception:
                     log.warning("Could not persist Rich Message health", exc_info=True)
             if message_id is not None:

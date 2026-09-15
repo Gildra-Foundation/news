@@ -220,9 +220,15 @@ async def test_publish_marks_fragment_healthy_when_rich_message_is_accepted(
     monkeypatch,
 ) -> None:
     states: list[tuple[str, str, str]] = []
+    restored: list[tuple[object, str, int, str, object]] = []
+    client = object()
 
     async def set_state(key: str, value: str, detail: str = "") -> None:
         states.append((key, value, detail))
+
+    async def restore(active_client, channel, message_id, html, media_files=None):
+        restored.append((active_client, channel, message_id, html, media_files))
+        return True
 
     class Bot:
         async def __call__(self, method):
@@ -230,20 +236,74 @@ async def test_publish_marks_fragment_healthy_when_rich_message_is_accepted(
             return SimpleNamespace(message_id=92)
 
     monkeypatch.setattr(tg_writer.db, "set_service_state", set_state)
-
-    result = await tg_writer.publish(
-        Bot(),
-        "@channel",
-        '<tg-emoji emoji-id="123">⚔️</tg-emoji> <b>Заголовок</b>',
+    monkeypatch.setattr(
+        tg_writer.mtproto,
+        "restore_rich_message_custom_emojis",
+        restore,
     )
 
+    tg_writer.configure_mtproto_publisher(client)
+    try:
+        result = await tg_writer.publish(
+            Bot(),
+            "@channel",
+            '<tg-emoji emoji-id="123">⚔️</tg-emoji> <b>Заголовок</b>',
+        )
+    finally:
+        tg_writer.configure_mtproto_publisher(None)
+
     assert result == 92
+    assert len(restored) == 1
+    assert restored[0][0:3] == (client, "@channel", 92)
+    assert '<tg-emoji emoji-id="123">⚔️</tg-emoji>' in restored[0][3]
     assert states == [
         (
             "fragment_integration",
             "healthy",
             "",
         )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_published_rich_message_survives_mtproto_restore_failure(
+    monkeypatch,
+) -> None:
+    states: list[tuple[str, str, str]] = []
+
+    async def set_state(key: str, value: str, detail: str = "") -> None:
+        states.append((key, value, detail))
+
+    async def restore(*args, **kwargs):
+        raise ConnectionError("temporary MTProto outage")
+
+    class Bot:
+        async def __call__(self, method):
+            return SimpleNamespace(message_id=96)
+
+    monkeypatch.setattr(tg_writer.db, "set_service_state", set_state)
+    monkeypatch.setattr(
+        tg_writer.mtproto,
+        "restore_rich_message_custom_emojis",
+        restore,
+    )
+    tg_writer.configure_mtproto_publisher(object())
+    try:
+        result = await tg_writer.publish(
+            Bot(),
+            "@channel",
+            '<tg-emoji emoji-id="123">⚔️</tg-emoji> <b>Заголовок</b>',
+        )
+    finally:
+        tg_writer.configure_mtproto_publisher(None)
+
+    assert result == 96
+    assert states == [
+        (
+            "fragment_integration",
+            "faulty",
+            "MTProto Rich Message edit failed: ConnectionError",
+        ),
     ]
 
 
