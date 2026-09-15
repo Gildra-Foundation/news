@@ -128,7 +128,7 @@ class TelegramEmojiRegistry:
         *,
         fallback: str,
     ) -> TelegramEmojiAsset:
-        set_name, existing = await self._select_set(entity.branch)
+        set_name, existing = await self._select_set(entity)
         old_ids = _custom_ids(existing)
         sticker = InputSticker(
             sticker=FSInputFile(icon.path),
@@ -171,11 +171,14 @@ class TelegramEmojiRegistry:
             fallback=fallback,
         )
 
-    async def _select_set(self, branch: str) -> tuple[str, Any | None]:
+    async def _select_set(
+        self, entity: ResolvedWarcraftEntity,
+    ) -> tuple[str, Any | None]:
         me = await self.bot.get_me()
         username = _USERNAME_RE.sub("_", (me.username or "bot").lower()).strip("_")
+        scope = "core" if entity.kind in {"class", "specialization"} else entity.branch
         for index in range(1, 100):
-            name = f"{self.set_prefix}_{branch}_{index:02d}_by_{username}"[:64]
+            name = f"{self.set_prefix}_{scope}_{index:02d}_by_{username}"[:64]
             sticker_set = await self._get_set(name)
             local_count = await sqlite.ready_emoji_count_in_set(name)
             remote_count = len(sticker_set.stickers) if sticker_set is not None else 0
@@ -205,8 +208,9 @@ def _custom_ids(sticker_set: Any | None) -> set[str]:
 
 def _set_title(branch: str, set_name: str) -> str:
     number = set_name.rsplit("_by_", 1)[0].rsplit("_", 1)[-1]
-    branch_title = {"retail": "Retail", "classic": "Classic", "forever": "Forever"}.get(
-        branch, branch.title(),
+    scope = "core" if "_core_" in set_name else branch
+    branch_title = {"core": "Core", "retail": "Retail", "classic": "Classic", "forever": "Forever"}.get(
+        scope, scope.title(),
     )
     return f"Gildra Warcraft {branch_title} {number}"[:64]
 

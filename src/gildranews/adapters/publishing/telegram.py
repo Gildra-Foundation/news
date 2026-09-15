@@ -35,7 +35,10 @@ HASHTAGS = {
 }
 DEFAULT_HASHTAG_KEY = "полезное"
 _WOWHEAD_ENTITY_PATH_RE = re.compile(
-    r"^/(?:classic/)?(?:achievement|item|npc|spell|transmog-set|zone)=\d+$"
+    r"^/(?:classic/)?(?:"
+    r"(?:achievement|item|npc|spell|transmog-set|zone)=\d+"
+    r"|class=\d+(?:/[a-z0-9-]+)?"
+    r")$"
 )
 _CUSTOM_EMOJI_RE = re.compile(
     r'<tg-emoji\s+emoji-id="[0-9]+">(.*?)</tg-emoji>',
@@ -138,10 +141,15 @@ def make_dispatcher(admin_id: int, target_channel: str) -> Dispatcher:
         if not _is_admin(message, admin_id):
             return
         assets = await db.list_emoji_assets(limit=20)
+        fragment = await db.get_service_state("fragment_integration")
         if not assets:
-            await message.answer("Игровых Custom Emoji в реестре пока нет.")
+            state = fragment["value"] if fragment else "не проверена"
+            await message.answer(
+                f"Игровых Custom Emoji в реестре пока нет. Fragment: {state}."
+            )
             return
-        lines = ["Последние игровые Custom Emoji:"]
+        state = fragment["value"] if fragment else "не проверена"
+        lines = [f"Fragment: {state}", "Последние игровые Custom Emoji:"]
         for asset in assets:
             suffix = f" — {html_escape(asset['last_error'])}" if asset["last_error"] else ""
             lines.append(
@@ -389,7 +397,13 @@ async def publish(
     emoji_retried = False
     for attempt in range(3):
         try:
-            return await _publish_once(bot, target_channel, current_text, media_files)
+            message_id = await _publish_once(bot, target_channel, current_text, media_files)
+            if _CUSTOM_EMOJI_RE.search(current_text):
+                try:
+                    await db.set_service_state("fragment_integration", "healthy")
+                except Exception:
+                    log.warning("Could not persist Fragment health", exc_info=True)
+            return message_id
         except TelegramRetryAfter as e:
             wait = min(int(e.retry_after) + 1, 60)
             log.warning(
@@ -404,6 +418,14 @@ async def publish(
         except TelegramAPIError:
             if not emoji_retried and _CUSTOM_EMOJI_RE.search(current_text):
                 emoji_retried = True
+                try:
+                    await db.set_service_state(
+                        "fragment_integration",
+                        "faulty",
+                        "Telegram rejected Custom Emoji formatting",
+                    )
+                except Exception:
+                    log.warning("Could not persist Fragment failure", exc_info=True)
                 current_text = without_custom_emojis(current_text)
                 log.exception(
                     "Telegram rejected a post with Custom Emoji; retrying with Unicode"

@@ -30,5 +30,11 @@ async def test_draft_round_trips_warcraft_enrichment(monkeypatch, tmp_path) -> N
             ("Огненный шар", "https://www.wowhead.com/spell=133")
         ]
         assert draft["custom_emojis"] == [asset]
+
+        await sqlite.set_service_state("fragment_integration", "faulty", "rejected")
+        state = await sqlite.get_service_state("fragment_integration")
+        assert state is not None
+        assert state["value"] == "faulty"
+        assert state["detail"] == "rejected"
     finally:
         await sqlite.close()

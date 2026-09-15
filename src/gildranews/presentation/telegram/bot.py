@@ -689,8 +689,8 @@ async def run_bot() -> None:
         for i, eid in enumerate(unique_ids, 1):
             lines.append(f"{i}. <code>{eid}</code>")
         lines.append(
-            "\nЧтобы использовать: впишите ID в файл "
-            "<code>data/emojis.json</code> в поле \"id\" нужной темы."
+            "\nАвтоматический Warcraft-реестр сам сохраняет созданные ID в SQLite. "
+            "Эта команда оставлена для диагностики сторонних наборов."
         )
         await message.answer("\n".join(lines))
 

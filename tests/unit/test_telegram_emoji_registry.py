@@ -52,6 +52,18 @@ def _entity() -> ResolvedWarcraftEntity:
     )
 
 
+def _class_entity() -> ResolvedWarcraftEntity:
+    return ResolvedWarcraftEntity(
+        branch="retail",
+        kind="class",
+        external_id=8,
+        canonical_name="Mage",
+        localized_name="Маг",
+        page_url="https://www.wowhead.com/class=8/mage",
+        icon_url="https://wow.zamimg.com/images/wow/icons/large/classicon_mage.jpg",
+    )
+
+
 def _icon(tmp_path: Path) -> NormalizedIcon:
     path = tmp_path / "icon.webp"
     path.write_bytes(b"webp")
@@ -111,5 +123,22 @@ async def test_registry_does_not_upload_when_disabled(monkeypatch, tmp_path) -> 
 
         assert result is None
         assert bot.uploads == 0
+    finally:
+        await sqlite.close()
+
+
+@pytest.mark.asyncio
+async def test_registry_places_classes_in_core_set(monkeypatch, tmp_path) -> None:
+    await sqlite.close()
+    monkeypatch.setattr(sqlite, "DB_PATH", str(tmp_path / "newsbot.db"))
+    await sqlite.init()
+    bot = FakeBot()
+    try:
+        result = await TelegramEmojiRegistry(
+            bot, owner_user_id=42, enabled=True,
+        ).get_or_create(_class_entity(), _icon(tmp_path), fallback="⚔️")
+
+        assert result is not None
+        assert result.sticker_set_name == "gildra_warcraft_core_01_by_gildranews_bot"
     finally:
         await sqlite.close()

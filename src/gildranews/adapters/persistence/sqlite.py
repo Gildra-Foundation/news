@@ -81,6 +81,12 @@ CREATE TABLE IF NOT EXISTS telegram_emoji_assets (
 );
 CREATE INDEX IF NOT EXISTS idx_telegram_emoji_status
     ON telegram_emoji_assets(status, next_retry_at);
+CREATE TABLE IF NOT EXISTS service_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS drafts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_url TEXT,
@@ -583,6 +589,30 @@ async def due_emoji_uploads(limit: int = 2) -> list[dict]:
         "external_id", "canonical_name", "localized_name", "page_url", "icon_url",
     ]
     return [dict(zip(keys, row, strict=True)) for row in rows]
+
+
+async def set_service_state(key: str, value: str, detail: str = "") -> None:
+    db = await _get_conn()
+    await db.execute(
+        """INSERT INTO service_state(key, value, detail)
+           VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value=excluded.value,
+               detail=excluded.detail, updated_at=CURRENT_TIMESTAMP""",
+        (key[:100], value[:100], detail[:500]),
+    )
+    await db.commit()
+
+
+async def get_service_state(key: str) -> dict | None:
+    db = await _get_conn()
+    async with db.execute(
+        "SELECT value, detail, updated_at FROM service_state WHERE key=?",
+        (key[:100],),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return None
+    return {"value": row[0], "detail": row[1], "updated_at": row[2]}
 
 
 async def retry_emoji_asset(asset_id: int) -> bool:

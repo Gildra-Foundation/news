@@ -84,8 +84,16 @@ def test_post_formatter_uses_at_most_two_warcraft_custom_emojis() -> None:
 
 
 @pytest.mark.asyncio
-async def test_publish_retries_without_custom_emoji_when_telegram_rejects_it() -> None:
+async def test_publish_retries_without_custom_emoji_when_telegram_rejects_it(
+    monkeypatch,
+) -> None:
     texts: list[str] = []
+    states: list[tuple[str, str]] = []
+
+    async def set_state(key: str, value: str, detail: str = "") -> None:
+        states.append((key, value))
+
+    monkeypatch.setattr(tg_writer.db, "set_service_state", set_state)
 
     class Bot:
         async def send_message(self, **kwargs):
@@ -106,6 +114,7 @@ async def test_publish_retries_without_custom_emoji_when_telegram_rejects_it() -
     assert result == 91
     assert len(texts) == 2
     assert texts[1] == "⚔️ <b>Заголовок</b>"
+    assert states == [("fragment_integration", "faulty")]
 
 
 def test_emoji_override_ignores_invalid_patterns_and_finds_valid_match() -> None:

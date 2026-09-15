@@ -202,6 +202,9 @@ docker compose up -d --force-recreate
 | `/digest` | Собрать и опубликовать недельный дайджест |
 | `/status` | Итоги последнего прогона |
 | `/emojiid` | Извлечь ID premium-эмодзи из пересланного сообщения |
+| `/emojis` | Состояние Warcraft Custom Emoji и Fragment-интеграции |
+| `/emoji_retry ID` | Вернуть неудачную загрузку в очередь |
+| `/emoji_disable ID` | Отключить проблемную загрузку |
 | `/cancel` | Отменить ожидание правки |
 
 ---
@@ -235,26 +238,27 @@ docker compose up -d --force-recreate
 
 ## 🏷️ Premium-эмодзи
 
-37 анимированных эмодзи встраиваются перед заголовком каждого поста через `<tg-emoji emoji-id="…">` теги.
+Luna выделяет до трёх сущностей Warcraft: класс, специализацию, заклинание,
+предмет, косметику, средство передвижения, рейд, подземелье, босса и другие.
+Бот проверяет точное совпадение и ветку игры, скачивает оригинальную иконку,
+приводит её к статическому WEBP 100×100 и сохраняет созданный
+`custom_emoji_id` в SQLite.
 
-> 🗂️ Каталог ID и подробный гайд по premium-эмодзи в Telegram-ботах — отдельный репозиторий: **[Zulut30/premium-telegram-emoji](https://github.com/Zulut30/premium-telegram-emoji)**. Там полный список айдишников (новостные эмодзи, лого приложений, AI-компании, языки программирования), способы получить ID и примеры кода.
+В пост попадает не более двух Custom Emoji. При неоднозначном совпадении,
+ошибке загрузки или отказе Telegram публикация продолжается с обычным
+Unicode-эмодзи. Загрузка повторяется через очередь с ограничением 10 новых
+эмодзи в сутки и не более 190 элементов в одном наборе.
 
-### Категории
+Для использования Custom Emoji ботом в канале к боту должен быть привязан
+дополнительный коллекционный username с Fragment. После привязки включите:
 
-| Группа | Что входит |
-|---|---|
-| **Общие** (11 шт.) | release, tool, model, research, business, regulation, tip, ux, case, viral, internet |
-| **Лого AI-компаний** (10 шт.) | OpenAI/ChatGPT, Anthropic/Claude, Google/Gemini, xAI/Grok, DeepSeek, Qwen, Mistral, Perplexity, ElevenLabs, Copilot |
-| **Платформы** (9 шт.) | GitHub, Telegram, Discord, Reddit, YouTube, Figma, Blender, Google Cloud, Microsoft |
-| **Языки** (7 шт.) | Python, JavaScript, TypeScript, Go, Java, C++, Rust |
+```ini
+EMOJI_AUTOCREATE_ENABLED=true
+```
 
-### Логика выбора
-
-1. **Gemini** выбирает категорию (release / tool / model и т.п.) из общих
-2. **Бот** проходит regex по title+body — если упомянуты «Claude», «Python», «GitHub» и т.п. — **подменяет** на конкретный лого
-3. Если ничего не найдено — категория Gemini
-
-> ⚠️ Bot API 9.4 разрешает premium-эмодзи только в private/group/supergroup чатах. В каналах — fallback на Unicode-эмодзи (на скрине: 🤖 🧠 🐍 👽). Premium-анимация заработает, когда Telegram откроет каналы в Bot API.
+Технические ограничения файлов и наборов описаны в
+[Telegram Bot API](https://core.telegram.org/bots/api#addstickertoset) и
+[руководстве Telegram по стикерам](https://core.telegram.org/stickers).
 
 ---
 
@@ -294,7 +298,8 @@ gantt
 │   │   ├── publishing/        # Публикация через Telegram Bot API
 │   │   ├── persistence/       # SQLite
 │   │   ├── rendering/         # Карточки и инфографика Pillow
-│   │   └── emoji/             # Каталог и выбор emoji
+│   │   ├── emoji/             # Совместимость со старым каталогом emoji
+│   │   └── warcraft/          # Иконки и Telegram Custom Emoji registry
 │   ├── presentation/telegram/ # Команды, callbacks, уведомления и real-time события
 │   ├── jobs/                  # Планировщик, cleanup и недельный дайджест
 │   ├── config.py              # Типизированная конфигурация окружения
@@ -308,7 +313,7 @@ gantt
 └── data/                      # Создаётся при первом запуске, не хранится в Git
     ├── userbot.session        # Telethon-сессия
     ├── newsbot.db             # SQLite с WAL
-    ├── emojis.json            # Карта 37 эмодзи (можно править на лету)
+    ├── emoji_icons/           # Нормализованные игровые иконки 100×100
     └── screenshots/           # Временные карточки X/Reddit/GitHub
 ```
 
@@ -351,24 +356,16 @@ SCRAPE_DO_ENABLED=false
 LOOKBACK_MINUTES=45         # окно поллинга
 INTERVAL_MINUTES=30         # период safety-net
 MAX_POSTS_PER_RUN=3
+
+# Warcraft Custom Emoji после привязки Fragment username
+EMOJI_AUTOCREATE_ENABLED=true
+EMOJI_MAX_NEW_PER_DAY=10
+EMOJI_UPLOAD_TIMEOUT_SECONDS=15
 ```
 
-### data/emojis.json
-
-Карта премиум-эмодзи. Можно править руками — формат:
-
-```json
-{
-  "logo_openai": {
-    "id": "5945217417591397712",
-    "fallback": "🤖",
-    "desc": "лого OpenAI/ChatGPT",
-    "match_pattern": "\\b(OpenAI|ChatGPT|GPT[- ]?[345Oo]|Sora|DALL[- ]?E)\\b"
-  }
-}
-```
-
-`match_pattern` — regex для auto-override по упоминанию в title+body. Без него — обычная категория для выбора Gemini.
+Реестр игровых сущностей, хэшей изображений, очереди и `custom_emoji_id`
+хранится в таблицах `warcraft_entities` и `telegram_emoji_assets` базы
+`data/newsbot.db`; ручной файл `data/emojis.json` для этого конвейера не нужен.
 
 ---
 

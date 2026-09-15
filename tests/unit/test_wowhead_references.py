@@ -133,3 +133,21 @@ async def test_resolve_entity_does_not_search_forever_in_retail_database() -> No
     )
 
     assert await resolve_entity(reference) is None
+
+
+@pytest.mark.asyncio
+async def test_class_resolver_uses_stable_core_catalog_without_network() -> None:
+    reference = WarcraftEntityRef(
+        label="мага",
+        query="Mage",
+        kind="class",
+        branch="forever",
+        role="primary",
+    )
+
+    result = await resolve_entity(reference)
+
+    assert result is not None
+    assert result.external_id == 8
+    assert result.icon_url.endswith("/classicon_mage.jpg")
+    assert result.page_url == "https://www.wowhead.com/class=8/mage"

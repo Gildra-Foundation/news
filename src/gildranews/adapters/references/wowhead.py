@@ -45,6 +45,21 @@ _PAGE_SLUGS = {
     "Achievement": "achievement",
     "Transmog Set": "transmog-set",
 }
+_CLASS_CATALOG = {
+    "warrior": (1, "warrior", "classicon_warrior"),
+    "paladin": (2, "paladin", "classicon_paladin"),
+    "hunter": (3, "hunter", "classicon_hunter"),
+    "rogue": (4, "rogue", "classicon_rogue"),
+    "priest": (5, "priest", "classicon_priest"),
+    "death knight": (6, "death-knight", "classicon_deathknight"),
+    "shaman": (7, "shaman", "classicon_shaman"),
+    "mage": (8, "mage", "classicon_mage"),
+    "warlock": (9, "warlock", "classicon_warlock"),
+    "monk": (10, "monk", "classicon_monk"),
+    "druid": (11, "druid", "classicon_druid"),
+    "demon hunter": (12, "demon-hunter", "classicon_demonhunter"),
+    "evoker": (13, "evoker", "classicon_evoker"),
+}
 
 
 class _JsonScriptParser(HTMLParser):
@@ -152,10 +167,23 @@ async def resolve_entity(
     """Resolve an exact, typed Retail/Classic entity without trusting AI-provided URLs."""
     query = _SPACE_RE.sub(" ", reference.query).strip()
     if (
-        reference.branch == "forever"
-        or not 1 < len(query) <= MAX_QUERY_CHARS
+        not 1 < len(query) <= MAX_QUERY_CHARS
         or any(ord(char) < 32 for char in query)
     ):
+        return None
+    if reference.kind == "class" and (class_info := _CLASS_CATALOG.get(_name_key(query))):
+        class_id, slug, icon = class_info
+        page_branch = "classic/" if reference.branch == "classic" else ""
+        return ResolvedWarcraftEntity(
+            branch=reference.branch,
+            kind=reference.kind,
+            external_id=class_id,
+            canonical_name=query,
+            localized_name=reference.label.strip(),
+            page_url=f"https://www.wowhead.com/{page_branch}class={class_id}/{slug}",
+            icon_url=f"https://wow.zamimg.com/images/wow/icons/large/{icon}.jpg",
+        )
+    if reference.branch == "forever":
         return None
     branch_path = "classic/" if reference.branch == "classic" else ""
     url = f"https://www.wowhead.com/{branch_path}search/suggestions-template"
