@@ -3,7 +3,8 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from gildranews.adapters.references.wowhead import resolve_reference
+from gildranews.adapters.references.wowhead import resolve_entity, resolve_reference
+from gildranews.domain.models import WarcraftEntityRef
 
 
 @pytest.mark.asyncio
@@ -61,3 +62,74 @@ async def test_resolve_reference_returns_none_without_exact_entity() -> None:
         result = await resolve_reference("Venomous Abyss", "raid", http_client=client)
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_entity_uses_typed_classic_search_result_and_icon() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/classic/search/suggestions-template"
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "results": [
+                    {
+                        "type": 6,
+                        "typeName": "Spell",
+                        "id": 133,
+                        "name": "Fireball",
+                        "icon": "spell_fire_flamebolt",
+                    },
+                    {"type": 3, "typeName": "Item", "id": 1, "name": "Fireball"},
+                ]
+            },
+        )
+
+    reference = WarcraftEntityRef(
+        label="Огненный шар",
+        query="Fireball",
+        kind="spell",
+        branch="classic",
+        role="primary",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await resolve_entity(reference, http_client=client)
+
+    assert result is not None
+    assert result.external_id == 133
+    assert result.branch == "classic"
+    assert result.page_url == "https://www.wowhead.com/classic/spell=133"
+    assert result.icon_url.endswith("/spell_fire_flamebolt.jpg")
+
+
+@pytest.mark.asyncio
+async def test_resolve_entity_rejects_ambiguous_exact_icons() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "results": [
+                    {"type": 6, "id": 133, "name": "Fireball", "icon": "fire_one"},
+                    {"type": 6, "id": 999, "name": "Fireball", "icon": "fire_two"},
+                ]
+            },
+        )
+
+    reference = WarcraftEntityRef("Огненный шар", "Fireball", "spell")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await resolve_entity(reference, http_client=client)
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_entity_does_not_search_forever_in_retail_database() -> None:
+    reference = WarcraftEntityRef(
+        "Неизвестная способность",
+        "Unknown Ability",
+        "spell",
+        branch="forever",
+    )
+
+    assert await resolve_entity(reference) is None

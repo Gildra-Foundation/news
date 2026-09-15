@@ -9,10 +9,42 @@ from urllib.parse import urlencode, urlparse
 
 import httpx
 
+from gildranews.domain.models import ResolvedWarcraftEntity, WarcraftEntityKind, WarcraftEntityRef
+
 ReferenceKind = Literal["raid", "creature"]
 MAX_SEARCH_BYTES = 2 * 1024 * 1024
 MAX_QUERY_CHARS = 100
 _SPACE_RE = re.compile(r"\s+")
+_ICON_RE = re.compile(r"[a-z0-9_]+\Z")
+
+_TYPE_CODE_NAMES = {1: "NPC", 3: "Item", 6: "Spell", 7: "Zone", 10: "Achievement", 101: "Transmog Set"}
+_EXPECTED_TYPES: dict[WarcraftEntityKind, frozenset[str]] = {
+    "class": frozenset({"Spell"}),
+    "specialization": frozenset({"Spell"}),
+    "spell": frozenset({"Spell"}),
+    "talent": frozenset({"Spell"}),
+    "item": frozenset({"Item"}),
+    "cosmetic": frozenset({"Item", "Transmog Set"}),
+    "transmog_set": frozenset({"Transmog Set"}),
+    "mount": frozenset({"Item", "Spell"}),
+    "pet": frozenset({"Item", "NPC", "Spell"}),
+    "achievement": frozenset({"Achievement"}),
+    "raid": frozenset({"Zone"}),
+    "dungeon": frozenset({"Zone"}),
+    "boss": frozenset({"NPC"}),
+    "creature": frozenset({"NPC"}),
+    "faction": frozenset({"Achievement", "NPC"}),
+    "profession": frozenset({"Spell"}),
+    "event": frozenset({"Achievement", "Zone"}),
+}
+_PAGE_SLUGS = {
+    "NPC": "npc",
+    "Item": "item",
+    "Spell": "spell",
+    "Zone": "zone",
+    "Achievement": "achievement",
+    "Transmog Set": "transmog-set",
+}
 
 
 class _JsonScriptParser(HTMLParser):
@@ -106,6 +138,87 @@ async def resolve_reference(
                 chunks.append(chunk)
         return _entity_url(b"".join(chunks), normalized_query, kind)
     except (httpx.HTTPError, ValueError):
+        return None
+    finally:
+        if owns_client:
+            await client.aclose()
+
+
+async def resolve_entity(
+    reference: WarcraftEntityRef,
+    *,
+    http_client: httpx.AsyncClient | None = None,
+) -> ResolvedWarcraftEntity | None:
+    """Resolve an exact, typed Retail/Classic entity without trusting AI-provided URLs."""
+    query = _SPACE_RE.sub(" ", reference.query).strip()
+    if (
+        reference.branch == "forever"
+        or not 1 < len(query) <= MAX_QUERY_CHARS
+        or any(ord(char) < 32 for char in query)
+    ):
+        return None
+    branch_path = "classic/" if reference.branch == "classic" else ""
+    url = f"https://www.wowhead.com/{branch_path}search/suggestions-template"
+    owns_client = http_client is None
+    client = http_client or httpx.AsyncClient(
+        timeout=20,
+        follow_redirects=True,
+        headers={"User-Agent": "GildraNews/0.1 Warcraft entity resolver"},
+    )
+    try:
+        async with client.stream("GET", url, params={"q": query}) as response:
+            response.raise_for_status()
+            final = urlparse(str(response.url))
+            if final.scheme != "https" or final.hostname != "www.wowhead.com":
+                return None
+            chunks: list[bytes] = []
+            size = 0
+            async for chunk in response.aiter_bytes():
+                size += len(chunk)
+                if size > MAX_SEARCH_BYTES:
+                    return None
+                chunks.append(chunk)
+        payload = json.loads(b"".join(chunks))
+        results = payload.get("results", []) if isinstance(payload, dict) else []
+        expected_types = _EXPECTED_TYPES[reference.kind]
+        exact: list[tuple[dict, str]] = []
+        for candidate in results:
+            if not isinstance(candidate, dict) or _name_key(str(candidate.get("name", ""))) != _name_key(query):
+                continue
+            type_name = str(candidate.get("typeName") or _TYPE_CODE_NAMES.get(candidate.get("type"), ""))
+            entity_id = candidate.get("id")
+            if type_name not in expected_types or not isinstance(entity_id, int) or entity_id <= 0:
+                continue
+            exact.append((candidate, type_name))
+        if not exact:
+            return None
+        identities = {
+            (type_name, str(candidate.get("icon") or ""))
+            for candidate, type_name in exact
+        }
+        if len(identities) > 1:
+            return None
+        candidate, type_name = exact[0]
+        icon = str(candidate.get("icon") or "").lower()
+        if icon and not _ICON_RE.fullmatch(icon):
+            return None
+        entity_id = int(candidate["id"])
+        page_prefix = f"https://www.wowhead.com/{branch_path}"
+        icon_url = (
+            f"https://wow.zamimg.com/images/wow/icons/large/{icon}.jpg"
+            if icon
+            else ""
+        )
+        return ResolvedWarcraftEntity(
+            branch=reference.branch,
+            kind=reference.kind,
+            external_id=entity_id,
+            canonical_name=str(candidate.get("name") or query).strip(),
+            localized_name=reference.label.strip(),
+            page_url=f"{page_prefix}{_PAGE_SLUGS[type_name]}={entity_id}",
+            icon_url=icon_url,
+        )
+    except (httpx.HTTPError, json.JSONDecodeError, TypeError, ValueError):
         return None
     finally:
         if owns_client:
