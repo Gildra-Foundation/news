@@ -13,6 +13,7 @@ async def test_search_finds_og_image_from_relevant_allowlisted_result() -> None:
         assert request.url.path == "/plugin/google/search"
         assert request.url.params["token"] == "secret"
         assert request.url.params["safe"] == "active"
+        assert request.url.params["resolveGoto"] == "true"
         return httpx.Response(
             200,
             request=request,

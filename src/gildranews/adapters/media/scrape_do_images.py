@@ -135,6 +135,7 @@ async def find_warcraft_image(
                 "safe": "active",
                 "hl": "en",
                 "gl": "us",
+                "resolveGoto": "true",
             },
         )
         if (
