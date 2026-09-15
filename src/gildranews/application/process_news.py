@@ -151,11 +151,14 @@ async def process_post(
                 emoji_theme = override
             inline_links = ()
             custom_emojis = ()
-            if cfg.emoji_autocreate_enabled and filt.references:
+            if cfg.emoji_autocreate_enabled:
                 try:
                     async with asyncio.timeout(cfg.emoji_upload_timeout_seconds):
                         enrichment = await warcraft_enrichment.enrich(
-                            bot, cfg, filt.references,
+                            bot,
+                            cfg,
+                            filt.references,
+                            publication_text=f"{filt.title}\n{filt.body}",
                         )
                     inline_links = enrichment.inline_links
                     custom_emojis = enrichment.emojis

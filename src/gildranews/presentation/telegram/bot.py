@@ -240,11 +240,14 @@ async def run_bot() -> None:
             emap, f"{rewrite.title}\n{rewrite.body}",
         )
         enrichment = warcraft_enrichment.WarcraftEnrichment()
-        if cfg.emoji_autocreate_enabled and rewrite.references:
+        if cfg.emoji_autocreate_enabled:
             try:
                 async with asyncio.timeout(cfg.emoji_upload_timeout_seconds):
                     enrichment = await warcraft_enrichment.enrich(
-                        bot, cfg, rewrite.references,
+                        bot,
+                        cfg,
+                        rewrite.references,
+                        publication_text=f"{rewrite.title}\n{rewrite.body}",
                     )
             except Exception:
                 log.warning("Warcraft enrichment failed for /test", exc_info=True)
@@ -353,11 +356,14 @@ async def run_bot() -> None:
             return
 
         enrichment = warcraft_enrichment.WarcraftEnrichment()
-        if cfg.emoji_autocreate_enabled and rewrite.references:
+        if cfg.emoji_autocreate_enabled:
             try:
                 async with asyncio.timeout(cfg.emoji_upload_timeout_seconds):
                     enrichment = await warcraft_enrichment.enrich(
-                        bot, cfg, rewrite.references,
+                        bot,
+                        cfg,
+                        rewrite.references,
+                        publication_text=f"{rewrite.title}\n{rewrite.body}",
                     )
             except Exception:
                 log.warning("Warcraft enrichment failed for manual link", exc_info=True)
@@ -629,11 +635,14 @@ async def run_bot() -> None:
             return
         await db.update_draft(draft_id, rewrite.title, rewrite.body, rewrite.hashtag)
         enrichment = warcraft_enrichment.WarcraftEnrichment()
-        if cfg.emoji_autocreate_enabled and rewrite.references:
+        if cfg.emoji_autocreate_enabled:
             try:
                 async with asyncio.timeout(cfg.emoji_upload_timeout_seconds):
                     enrichment = await warcraft_enrichment.enrich(
-                        bot, cfg, rewrite.references,
+                        bot,
+                        cfg,
+                        rewrite.references,
+                        publication_text=f"{rewrite.title}\n{rewrite.body}",
                     )
             except Exception:
                 log.warning("Warcraft enrichment failed after draft edit", exc_info=True)

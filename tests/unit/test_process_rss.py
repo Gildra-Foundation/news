@@ -188,8 +188,9 @@ async def test_icy_veins_uses_article_raid_cover_instead_of_infographic(
         published["text"] = text
         return 88
 
-    async def enrich(bot, cfg, references):
+    async def enrich(bot, cfg, references, *, publication_text=""):
         assert references[0].query == "Venomous Abyss"
+        assert "Ядовитой Бездне" in publication_text
         return WarcraftEnrichment(
             inline_links=(("Ядовитой Бездне", "https://www.wowhead.com/zone=16915"),),
             emojis=(TelegramEmojiAsset("123", "file", "set", "🏰"),),

@@ -55,6 +55,7 @@ _FILTER_JSON_SUFFIX = """
 {"is_news":true,"reason":"...","title":"...","body":"...","emoji_theme":"...","hashtag":"...","infographic":null,"references":[]}
 infographic может быть объектом с полями kicker, title, facts (2–4 объектов value/label), source="". Каждое value должно дословно встречаться во входном post. Для отклонённой новости infographic=null. Не добавляй источник, URL или название издания в title/body.
 references — не более трёх объектов {"label":"точный текст из title/body","query":"точное исходное английское имя из post","kind":"class|specialization|spell|talent|item|cosmetic|transmog_set|mount|pet|achievement|raid|dungeon|boss|creature|faction|profession|event|expansion","branch":"retail|classic|forever","role":"primary|secondary"}. Название дополнения сохраняй на английском и помечай kind=expansion. URL, ID и изображения не придумывай: их найдёт бот. Главную изменяемую сущность пометь primary, остальные secondary. Для остальных случаев references=[].
+Если материал относится к WoW: Forever, обязательно включи reference с label="WoW: Forever", query="WoW: Forever", kind="expansion", branch="forever", role="primary".
 """
 
 _RUSSIAN_REPAIR_PROMPT = """Ты — выпускающий редактор русскоязычного канала о World of Warcraft.
@@ -63,6 +64,7 @@ _RUSSIAN_REPAIR_PROMPT = """Ты — выпускающий редактор р�
 — переведи по смыслу названия рейдов, способностей, эффектов и механик;
 — имена существ и персонажей без точного перевода запиши кириллицей;
 — официальные английские названия дополнений сохраняй без перевода и без склонения;
+— если материал относится к WoW: Forever, обязательно сохрани это название в title или body и добавь для него reference типа expansion с веткой forever;
 — не оставляй другую латиницу, кроме Blizzard, WoW, World of Warcraft и официального названия WoW: Forever;
 — убери перечисленные artificial_style_markers и любые редакторские комментарии о самом материале;
 — исправь перечисленные presentation_issues: не повторяй заголовок в начале, раздели плотный текст и сократи body до 750 символов;

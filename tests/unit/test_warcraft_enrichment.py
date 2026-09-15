@@ -174,3 +174,26 @@ async def test_enricher_places_curated_expansion_logo_before_official_name(
             placement_label="The Last Titan",
         ),
     )
+
+
+@pytest.mark.asyncio
+async def test_enricher_adds_forever_logo_from_publication_text_without_references(
+    tmp_path,
+) -> None:
+    result = await warcraft_enrichment.enrich(
+        object(),
+        _cfg(tmp_path),
+        (),
+        publication_text="Новые подземелья появятся в WoW: Forever",
+    )
+
+    assert result.inline_links == ()
+    assert result.emojis == (
+        TelegramEmojiAsset(
+            "5280580484189953856",
+            "",
+            "gildra_warcraft_expansions",
+            "🎮",
+            placement_label="WoW: Forever",
+        ),
+    )

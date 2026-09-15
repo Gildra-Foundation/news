@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -20,7 +21,9 @@ log = logging.getLogger(__name__)
 
 EXPANSION_EMOJI_IDS = {
     "the last titan": "5283041899882523483",
+    "wow: forever": "5280580484189953856",
 }
+_WOW_FOREVER_RE = re.compile(r"\bWoW\s*:?\s*Forever\b", re.IGNORECASE)
 
 _KIND_PRIORITY = {
     "expansion": -1,
@@ -45,9 +48,24 @@ async def enrich(
     bot: Bot,
     cfg: Config,
     references: tuple[WarcraftEntityRef, ...],
+    *,
+    publication_text: str = "",
 ) -> WarcraftEnrichment:
+    emojis: list[TelegramEmojiAsset] = []
+    if match := _WOW_FOREVER_RE.search(publication_text):
+        emoji_id = EXPANSION_EMOJI_IDS.get("wow: forever", "")
+        if emoji_id.isdigit():
+            emojis.append(
+                TelegramEmojiAsset(
+                    custom_emoji_id=emoji_id,
+                    file_id="",
+                    sticker_set_name="gildra_warcraft_expansions",
+                    fallback="🎮",
+                    placement_label=match.group(0),
+                )
+            )
     if not references:
-        return WarcraftEnrichment()
+        return WarcraftEnrichment(emojis=tuple(emojis))
     ordered = sorted(
         references[:3],
         key=lambda ref: (
@@ -65,7 +83,6 @@ async def enrich(
     )
     icon_dir = Path(cfg.emoji_icon_dir)
     links: list[tuple[str, str]] = []
-    emojis: list[TelegramEmojiAsset] = []
     async with httpx.AsyncClient(
         timeout=20,
         headers={"User-Agent": "GildraNews/0.1 Warcraft enrichment"},
@@ -73,7 +90,11 @@ async def enrich(
         for reference in ordered:
             if reference.kind == "expansion":
                 emoji_id = EXPANSION_EMOJI_IDS.get(reference.query.casefold().strip(), "")
-                if emoji_id.isdigit() and len(emojis) < 2:
+                if (
+                    emoji_id.isdigit()
+                    and len(emojis) < 2
+                    and all(asset.custom_emoji_id != emoji_id for asset in emojis)
+                ):
                     emojis.append(
                         TelegramEmojiAsset(
                             custom_emoji_id=emoji_id,

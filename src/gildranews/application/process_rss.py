@@ -85,11 +85,14 @@ async def process_item(
     ) or analysis.emoji_theme
     inline_links: list[tuple[str, str]] = []
     custom_emojis = ()
-    if cfg.emoji_autocreate_enabled and analysis.references:
+    if cfg.emoji_autocreate_enabled:
         try:
             async with asyncio.timeout(cfg.emoji_upload_timeout_seconds):
                 enrichment = await warcraft_enrichment.enrich(
-                    bot, cfg, analysis.references,
+                    bot,
+                    cfg,
+                    analysis.references,
+                    publication_text=f"{analysis.title}\n{analysis.body}",
                 )
             inline_links.extend(enrichment.inline_links)
             custom_emojis = enrichment.emojis
