@@ -121,6 +121,52 @@ class _SequenceAppServer(_StubAppServer):
 
 
 @pytest.mark.asyncio
+async def test_class_changes_require_ability_and_specialization_references() -> None:
+    app_server = _SequenceAppServer(
+        [
+            {
+                "is_news": True,
+                "reason": "Изменение класса",
+                "title": "Друидам изменили лечение",
+                "body": "Природное изобилие переработали у друида Восстановления.",
+                "hashtag": "новости",
+            },
+            {
+                "title": "Друидам изменили лечение",
+                "body": "Природное изобилие переработали у друида Восстановления.",
+                "hashtag": "новости",
+                "references": [
+                    {
+                        "label": "Природное изобилие",
+                        "query": "Nature's Bounty",
+                        "kind": "spell",
+                        "role": "primary",
+                    },
+                    {
+                        "label": "Восстановления",
+                        "query": "Restoration Druid",
+                        "kind": "specialization",
+                        "role": "secondary",
+                    },
+                ],
+            },
+        ],
+    )
+
+    result = await AppServerContentAI(app_server).filter_and_rewrite(
+        "CLASS TUNING\nDRUID\nRestoration\nNature's Bounty has been redesigned.",
+        [],
+        [],
+    )
+
+    assert result is not None
+    assert [(ref.kind, ref.query) for ref in result.references] == [
+        ("spell", "Nature's Bounty"),
+        ("specialization", "Restoration Druid"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_luna_rejects_accepted_news_without_event_fingerprint() -> None:
     class _RawStub:
         async def complete(self, system: str, user: str) -> str:

@@ -50,6 +50,10 @@ _NAMED_GAME_OBJECT_RE = re.compile(
     r"\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+)+\b",
 )
 _RANKING_CONTEXT_RE = re.compile(r"\b(?:dps|rankings?|logs?)\b", re.IGNORECASE)
+_CLASS_CHANGE_CONTEXT_RE = re.compile(
+    r"\bclass\s+(?:tuning|changes?)\b",
+    re.IGNORECASE,
+)
 _SPECIALIZATION_REFERENCE_ALIASES = {
     "augmentation": frozenset({"augmentation", "augmentation evoker"}),
     "devastation": frozenset({"devastation", "devastation evoker"}),
@@ -71,6 +75,7 @@ _FILTER_JSON_SUFFIX = """
 infographic может быть объектом с полями kicker, title, facts (2–4 объектов value/label), source="". Каждое value должно дословно встречаться во входном post. Для отклонённой новости infographic=null. Не добавляй источник, URL или название издания в title/body.
 fingerprint обязателен для принятой новости. Он описывает само событие, а не статью: game_branch=retail|classic|forever; version — версия игры; subject — короткий устойчивый объект изменения; action — короткое действие; status — announced|testing|scheduled|live|cancelled или пусто; effective_date — точная дата либо пусто; scope и material_facts содержат только существенные факты из post. Для одного события в разных источниках выбирай одинаковые subject и action. Дополнительные примеры и пересказ не являются новым фактом.
 references — не более трёх объектов {"label":"точный текст из title/body","query":"точное исходное английское имя из post","kind":"class|specialization|spell|talent|item|cosmetic|transmog_set|mount|pet|achievement|raid|dungeon|boss|creature|faction|profession|event|expansion","branch":"retail|classic|forever","role":"primary|secondary"}. Название дополнения сохраняй на английском и помечай kind=expansion. URL, ID и изображения не придумывай: их найдёт бот. Главную изменяемую сущность пометь primary, остальные secondary. Для остальных случаев references=[].
+Для новости об изменениях класса обязательно добавь две references: изменённую способность или талант как primary и её специализацию как secondary. Для specialization в query укажи полную пару «специализация + класс», например Restoration Druid.
 В рейтинге специализаций включи в references две самые важные специализации с kind=specialization для значков и названный рейд с kind=raid для ссылки. Для специализаций используй точные английские названия из post; классы отдельными references не добавляй.
 Если материал относится к WoW: Forever, обязательно включи reference с label="WoW: Forever", query="WoW: Forever", kind="expansion", branch="forever", role="primary".
 """
@@ -88,6 +93,7 @@ _RUSSIAN_REPAIR_PROMPT = """Ты — выпускающий редактор р�
 — исправь перечисленные specialization_issues и при первом упоминании называй класс вместе со специализацией: Augmentation Evoker — «пробудитель Насыщатель», Devastation Evoker — «пробудитель Опустошитель», Retribution Paladin — «паладин Воздаяния», Enhancement Shaman — «шаман Совершенствование»;
 — если переданы reference_issues, добавь ссылочную сущность названного рейда, подземелья или босса: label обязан дословно находиться в русском title/body, query — быть точным английским названием из source_text; не создавай ссылки на классы;
 — для ranking_without_specialization_references добавь две главные специализации как references с kind=specialization: label — точное русское название из title/body, query — точное английское название из source_text; главную пометь primary;
+— для class_changes_without_ability_and_specialization_references добавь изменённую способность или талант как primary и её специализацию как secondary; для specialization query запиши как «специализация + класс»;
 — начни с события, действия или числа; пиши прямыми короткими фразами без канцелярита;
 — одно предложение — одна мысль; длинную фразу раздели на две;
 — не используй точку с запятой: она перегружает текст;
@@ -257,7 +263,14 @@ def _references(
     for value in values:
         label = normalize_wow_expansion_names(source, value.label.strip())
         query = value.query.strip()
-        if not label or not query or label not in published_text or query.casefold() not in source_key:
+        query_in_source = query.casefold() in source_key
+        if value.kind == "specialization" and not query_in_source:
+            query_words = re.findall(r"[a-z0-9]+", query.casefold())
+            query_in_source = len(query_words) >= 2 and all(
+                re.search(rf"\b{re.escape(word)}\b", source_key)
+                for word in query_words
+            )
+        if not label or not query or label not in published_text or not query_in_source:
             continue
         references.append(
             EntityReference(
@@ -310,6 +323,20 @@ def _specialization_reference_issues(
     if len(mentioned & referenced) < required:
         return ("ranking_without_specialization_references",)
     return ()
+
+
+def _combat_reference_issues(
+    source: str,
+    references: tuple[EntityReference, ...],
+) -> tuple[str, ...]:
+    """Class-change posts need contextual icons, not a generic brand marker."""
+    if not _CLASS_CHANGE_CONTEXT_RE.search(source):
+        return ()
+    has_ability = any(ref.kind in {"spell", "talent"} for ref in references)
+    has_specialization = any(ref.kind == "specialization" for ref in references)
+    if has_ability and has_specialization:
+        return ()
+    return ("class_changes_without_ability_and_specialization_references",)
 
 
 class AppServerContentAI:
@@ -408,6 +435,7 @@ class AppServerContentAI:
         reference_issues = (
             *_reference_issues(text, rewrite.references),
             *_specialization_reference_issues(text, rewrite.references),
+            *_combat_reference_issues(text, rewrite.references),
         )
         if (
             terms
@@ -465,6 +493,7 @@ class AppServerContentAI:
                 )
                 or _reference_issues(text, repaired_references)
                 or _specialization_reference_issues(text, repaired_references)
+                or _combat_reference_issues(text, repaired_references)
             ):
                 log.warning("Editorial repair did not pass language and style gates")
                 return None

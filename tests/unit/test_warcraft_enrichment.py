@@ -195,7 +195,7 @@ async def test_enricher_keeps_unicode_fallback_while_custom_emoji_is_queued(
 
 
 @pytest.mark.asyncio
-async def test_enricher_uses_brand_premium_emoji_when_exact_asset_is_queued(
+async def test_enricher_never_replaces_queued_entity_with_brand_emoji(
     monkeypatch, tmp_path,
 ) -> None:
     cfg = replace(_cfg(tmp_path), subscribe_emoji_id="999")
@@ -236,7 +236,13 @@ async def test_enricher_uses_brand_premium_emoji_when_exact_asset_is_queued(
     )
 
     assert result.emojis == (
-        TelegramEmojiAsset("999", "", "gildra_brand", "🛡️"),
+        TelegramEmojiAsset(
+            custom_emoji_id="",
+            file_id="",
+            sticker_set_name="",
+            fallback="🏆",
+            placement_label="Покоритель проклятий",
+        ),
     )
 
 

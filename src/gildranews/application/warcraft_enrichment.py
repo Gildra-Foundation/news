@@ -44,24 +44,6 @@ class WarcraftEnrichment:
     emojis: tuple[TelegramEmojiAsset, ...] = ()
 
 
-def _premium_or_brand_fallback(
-    emojis: list[TelegramEmojiAsset],
-    cfg: Config,
-) -> tuple[TelegramEmojiAsset, ...]:
-    if any(asset.custom_emoji_id.isdigit() for asset in emojis):
-        return tuple(emojis)
-    if cfg.subscribe_emoji_id.isdigit():
-        return (
-            TelegramEmojiAsset(
-                custom_emoji_id=cfg.subscribe_emoji_id,
-                file_id="",
-                sticker_set_name="gildra_brand",
-                fallback="🛡️",
-            ),
-        )
-    return tuple(emojis)
-
-
 async def enrich(
     bot: Bot,
     cfg: Config,
@@ -83,7 +65,7 @@ async def enrich(
                 )
             )
     if not references:
-        return WarcraftEnrichment(emojis=_premium_or_brand_fallback(emojis, cfg))
+        return WarcraftEnrichment(emojis=tuple(emojis))
     ordered = sorted(
         references[:3],
         key=lambda ref: (
@@ -156,4 +138,4 @@ async def enrich(
                     fallback=pick_fallback(entity.kind),
                 )
             emojis.append(replace(asset, placement_label=reference.label.strip()))
-    return WarcraftEnrichment(tuple(links), _premium_or_brand_fallback(emojis, cfg))
+    return WarcraftEnrichment(tuple(links), tuple(emojis))

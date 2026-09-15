@@ -68,13 +68,59 @@ _CLASS_CATALOG = {
     "evoker": (13, "evoker", "classicon_evoker"),
 }
 _SPECIALIZATION_CATALOG = {
+    "arms warrior": (71, 1, "warrior", "ability_warrior_savageblow"),
+    "fury warrior": (72, 1, "warrior", "ability_warrior_innerrage"),
+    "protection warrior": (73, 1, "warrior", "ability_warrior_defensivestance"),
+    "holy paladin": (65, 2, "paladin", "spell_holy_holybolt"),
+    "protection paladin": (66, 2, "paladin", "ability_paladin_shieldofthetemplar"),
     "augmentation": (1473, 13, "evoker", "classicon_evoker_augmentation"),
     "augmentation evoker": (1473, 13, "evoker", "classicon_evoker_augmentation"),
     "devastation": (1467, 13, "evoker", "classicon_evoker_devastation"),
     "devastation evoker": (1467, 13, "evoker", "classicon_evoker_devastation"),
+    "preservation evoker": (1468, 13, "evoker", "classicon_evoker_preservation"),
     "retribution": (70, 2, "paladin", "spell_holy_auraoflight"),
     "retribution paladin": (70, 2, "paladin", "spell_holy_auraoflight"),
+    "beast mastery hunter": (253, 3, "hunter", "ability_hunter_bestialdiscipline"),
+    "marksmanship hunter": (254, 3, "hunter", "ability_hunter_focusedaim"),
+    "survival hunter": (255, 3, "hunter", "ability_hunter_camouflage"),
+    "assassination rogue": (259, 4, "rogue", "ability_rogue_deadliness"),
+    "outlaw rogue": (260, 4, "rogue", "ability_rogue_waylay"),
+    "subtlety rogue": (261, 4, "rogue", "ability_stealth"),
+    "discipline priest": (256, 5, "priest", "spell_holy_powerwordshield"),
+    "holy priest": (257, 5, "priest", "spell_holy_guardianspirit"),
+    "shadow priest": (258, 5, "priest", "spell_shadow_shadowwordpain"),
+    "blood death knight": (250, 6, "death-knight", "spell_deathknight_bloodpresence"),
+    "frost death knight": (251, 6, "death-knight", "spell_deathknight_frostpresence"),
+    "unholy death knight": (252, 6, "death-knight", "spell_deathknight_unholypresence"),
+    "elemental shaman": (262, 7, "shaman", "spell_nature_lightning"),
+    "enhancement shaman": (263, 7, "shaman", "spell_shaman_improvedreincarnation"),
+    "restoration shaman": (264, 7, "shaman", "spell_nature_magicimmunity"),
+    "arcane mage": (62, 8, "mage", "spell_holy_magicalsentry"),
+    "fire mage": (63, 8, "mage", "spell_fire_firebolt02"),
     "frost mage": (64, 8, "mage", "spell_frost_frostbolt02"),
+    "affliction warlock": (265, 9, "warlock", "spell_shadow_deathcoil"),
+    "demonology warlock": (266, 9, "warlock", "spell_shadow_metamorphosis"),
+    "destruction warlock": (267, 9, "warlock", "spell_shadow_rainoffire"),
+    "brewmaster monk": (268, 10, "monk", "spell_monk_brewmaster_spec"),
+    "windwalker monk": (269, 10, "monk", "spell_monk_windwalker_spec"),
+    "mistweaver monk": (270, 10, "monk", "spell_monk_mistweaver_spec"),
+    "balance druid": (102, 11, "druid", "spell_nature_starfall"),
+    "feral druid": (103, 11, "druid", "ability_druid_catform"),
+    "guardian druid": (104, 11, "druid", "ability_racial_bearform"),
+    "restoration druid": (105, 11, "druid", "spell_nature_healingtouch"),
+    "havoc demon hunter": (577, 12, "demon-hunter", "ability_demonhunter_specdps"),
+    "vengeance demon hunter": (581, 12, "demon-hunter", "ability_demonhunter_spectank"),
+    "devourer": (1213636, 12, "demon-hunter", "classicon_demonhunter_void"),
+    "devourer demon hunter": (
+        1213636,
+        12,
+        "demon-hunter",
+        "classicon_demonhunter_void",
+    ),
+}
+_SPELL_CATALOG = {
+    "hungering slash": (1239519, "inv_12_dh_void_ability_reapersslice"),
+    "nature's bounty": (1263879, "talentspec_druid_restoration"),
 }
 
 
@@ -212,6 +258,21 @@ async def resolve_entity(
             canonical_name=query,
             localized_name=reference.label.strip(),
             page_url=f"https://www.wowhead.com/class={class_id}/{class_slug}",
+            icon_url=f"https://wow.zamimg.com/images/wow/icons/large/{icon}.jpg",
+        )
+    if (
+        reference.kind in {"spell", "talent"}
+        and reference.branch == "retail"
+        and (spell_info := _SPELL_CATALOG.get(_name_key(query)))
+    ):
+        spell_id, icon = spell_info
+        return ResolvedWarcraftEntity(
+            branch=reference.branch,
+            kind=reference.kind,
+            external_id=spell_id,
+            canonical_name=query,
+            localized_name=reference.label.strip(),
+            page_url=f"https://www.wowhead.com/spell={spell_id}",
             icon_url=f"https://wow.zamimg.com/images/wow/icons/large/{icon}.jpg",
         )
     if reference.branch == "forever":

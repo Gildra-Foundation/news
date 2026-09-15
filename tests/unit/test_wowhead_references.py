@@ -311,6 +311,78 @@ async def test_class_resolver_uses_stable_core_catalog_without_network() -> None
             "mage",
             "spell_frost_frostbolt02",
         ),
+        (
+            "Devourer Demon Hunter",
+            "Пожиратель",
+            1213636,
+            12,
+            "demon-hunter",
+            "classicon_demonhunter_void",
+        ),
+        (
+            "Restoration Druid",
+            "Восстановление",
+            105,
+            11,
+            "druid",
+            "spell_nature_healingtouch",
+        ),
+        (
+            "Preservation Evoker",
+            "Сохранение",
+            1468,
+            13,
+            "evoker",
+            "classicon_evoker_preservation",
+        ),
+        (
+            "Arcane Mage",
+            "Тайная магия",
+            62,
+            8,
+            "mage",
+            "spell_holy_magicalsentry",
+        ),
+        (
+            "Discipline Priest",
+            "Послушание",
+            256,
+            5,
+            "priest",
+            "spell_holy_powerwordshield",
+        ),
+        (
+            "Holy Priest",
+            "Свет",
+            257,
+            5,
+            "priest",
+            "spell_holy_guardianspirit",
+        ),
+        (
+            "Outlaw Rogue",
+            "Головорез",
+            260,
+            4,
+            "rogue",
+            "ability_rogue_waylay",
+        ),
+        (
+            "Subtlety Rogue",
+            "Скрытность",
+            261,
+            4,
+            "rogue",
+            "ability_stealth",
+        ),
+        (
+            "Protection Warrior",
+            "Защита",
+            73,
+            1,
+            "warrior",
+            "ability_warrior_defensivestance",
+        ),
     ],
 )
 async def test_specialization_resolver_uses_verified_core_catalog_without_network(
@@ -340,6 +412,48 @@ async def test_specialization_resolver_uses_verified_core_catalog_without_networ
     assert result is not None
     assert result.external_id == specialization_id
     assert result.page_url == f"https://www.wowhead.com/class={class_id}/{class_slug}"
+    assert result.icon_url.endswith(f"/{icon}.jpg")
+    assert called is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("query", "label", "spell_id", "icon"),
+    [
+        (
+            "Hungering Slash",
+            "Голодное рассечение",
+            1239519,
+            "inv_12_dh_void_ability_reapersslice",
+        ),
+        (
+            "Nature's Bounty",
+            "Природное изобилие",
+            1263879,
+            "talentspec_druid_restoration",
+        ),
+    ],
+)
+async def test_spell_resolver_uses_verified_ability_catalog_without_network(
+    query,
+    label,
+    spell_id,
+    icon,
+) -> None:
+    called = False
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        return httpx.Response(500, request=request)
+
+    reference = WarcraftEntityRef(label, query, "spell", role="primary")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await resolve_entity(reference, http_client=client)
+
+    assert result is not None
+    assert result.external_id == spell_id
+    assert result.page_url == f"https://www.wowhead.com/spell={spell_id}"
     assert result.icon_url.endswith(f"/{icon}.jpg")
     assert called is False
 
