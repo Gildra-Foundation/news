@@ -97,6 +97,7 @@ class Config:
     interval_minutes: int
     max_posts_per_run: int
     telegram_reader_enabled: bool = False
+    mtproto_publisher_enabled: bool = False
     rss_enabled: bool = True
     rss_feed_urls: tuple[str, ...] = DEFAULT_RSS_FEED_URLS
     ai_provider: str = "app_server"
@@ -143,9 +144,12 @@ def load() -> Config:
     tg_api_id = _int("TG_API_ID", 0)
     tg_api_hash = os.getenv("TG_API_HASH", "").strip()
     telegram_reader_enabled = _bool("TELEGRAM_READER_ENABLED")
-    if telegram_reader_enabled and not (tg_api_id and tg_api_hash):
+    mtproto_publisher_enabled = _bool("MTPROTO_PUBLISHER_ENABLED")
+    if (telegram_reader_enabled or mtproto_publisher_enabled) and not (
+        tg_api_id and tg_api_hash
+    ):
         raise RuntimeError(
-            "Для TELEGRAM_READER_ENABLED=true задайте TG_API_ID и TG_API_HASH"
+            "Для Telegram MTProto задайте TG_API_ID и TG_API_HASH"
         )
     rss_enabled = _bool("RSS_ENABLED", True)
     rss_feed_urls = _csv("RSS_FEED_URLS", DEFAULT_RSS_FEED_URLS)
@@ -183,6 +187,7 @@ def load() -> Config:
         interval_minutes=_int("INTERVAL_MINUTES", 30),
         max_posts_per_run=_int("MAX_POSTS_PER_RUN", 3),
         telegram_reader_enabled=telegram_reader_enabled,
+        mtproto_publisher_enabled=mtproto_publisher_enabled,
         rss_enabled=rss_enabled,
         rss_feed_urls=rss_feed_urls,
         ai_provider=ai_provider,
