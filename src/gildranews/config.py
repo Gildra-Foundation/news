@@ -125,6 +125,7 @@ class Config:
     emoji_icon_dir: str = "data/emoji_icons"
     emoji_max_new_per_day: int = 10
     emoji_upload_timeout_seconds: int = 15
+    scrape_do_enabled: bool = False
 
 def load() -> Config:
     target = _required("TARGET_CHANNEL")
@@ -175,6 +176,9 @@ def load() -> Config:
         raise RuntimeError("Для GETXAPI_ENABLED=true задайте GETXAPI_KEY")
     if not x_search_query or len(x_search_query) > 400:
         raise RuntimeError("X_SEARCH_QUERY должен содержать от 1 до 400 символов")
+    scrape_do_enabled = _bool("SCRAPE_DO_ENABLED")
+    if scrape_do_enabled and not os.getenv("SCRAPE_DO_TOKEN", "").strip():
+        raise RuntimeError("Для SCRAPE_DO_ENABLED=true задайте SCRAPE_DO_TOKEN")
     return Config(
         tg_api_id=tg_api_id,
         tg_api_hash=tg_api_hash,
@@ -243,4 +247,5 @@ def load() -> Config:
         emoji_upload_timeout_seconds=_bounded_int(
             "EMOJI_UPLOAD_TIMEOUT_SECONDS", 15, minimum=1, maximum=60,
         ),
+        scrape_do_enabled=scrape_do_enabled,
     )

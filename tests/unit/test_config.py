@@ -43,6 +43,20 @@ def test_loads_custom_emoji_limits(monkeypatch) -> None:
     assert cfg.emoji_upload_timeout_seconds == 12
 
 
+def test_scrape_do_image_search_requires_explicit_enable(monkeypatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TARGET_CHANNEL", "channel")
+    monkeypatch.setenv("AI_PROVIDER", "app_server")
+    monkeypatch.setenv("SCRAPE_DO_TOKEN", "scrape-secret")
+    monkeypatch.delenv("SCRAPE_DO_ENABLED", raising=False)
+
+    assert config.load().scrape_do_enabled is False
+
+    monkeypatch.setenv("SCRAPE_DO_ENABLED", "true")
+
+    assert config.load().scrape_do_enabled is True
+
+
 def test_load_enables_daily_reddit_topics_with_existing_api_key(monkeypatch) -> None:
     monkeypatch.setenv("BOT_TOKEN", "bot-token")
     monkeypatch.setenv("TARGET_CHANNEL", "channel")
