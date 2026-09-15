@@ -124,6 +124,52 @@ async def test_resolve_entity_rejects_ambiguous_exact_icons() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resolve_raid_uses_raid_zone_with_matching_achievement_icon() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "results": [
+                    {
+                        "type": 7,
+                        "typeName": "Zone",
+                        "id": 5723,
+                        "name": "Firelands",
+                        "pinBreadcrumb": ["Raid"],
+                    },
+                    {
+                        "type": 7,
+                        "typeName": "Zone",
+                        "id": 10022,
+                        "name": "Firelands",
+                        "pinBreadcrumb": ["Scenario"],
+                    },
+                    {
+                        "type": 10,
+                        "typeName": "Achievement",
+                        "id": 5802,
+                        "name": "Firelands",
+                        "icon": "achievement_zone_firelands",
+                        "pinBreadcrumb": ["Dungeons & Raids", "Cataclysm Raid"],
+                    },
+                ],
+            },
+        )
+
+    reference = WarcraftEntityRef(
+        "Огненные просторы", "Firelands", "raid", role="primary",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await resolve_entity(reference, http_client=client)
+
+    assert result is not None
+    assert result.external_id == 5723
+    assert result.page_url == "https://www.wowhead.com/zone=5723"
+    assert result.icon_url.endswith("/achievement_zone_firelands.jpg")
+
+
+@pytest.mark.asyncio
 async def test_resolve_entity_prefers_spell_for_mount_over_item_result() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

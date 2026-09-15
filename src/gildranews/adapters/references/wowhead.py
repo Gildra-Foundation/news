@@ -29,8 +29,8 @@ _EXPECTED_TYPES: dict[WarcraftEntityKind, frozenset[str]] = {
     "mount": frozenset({"Item", "Spell"}),
     "pet": frozenset({"Item", "NPC", "Spell"}),
     "achievement": frozenset({"Achievement"}),
-    "raid": frozenset({"Zone"}),
-    "dungeon": frozenset({"Zone"}),
+    "raid": frozenset({"Zone", "Achievement"}),
+    "dungeon": frozenset({"Zone", "Achievement"}),
     "boss": frozenset({"NPC"}),
     "creature": frozenset({"NPC"}),
     "faction": frozenset({"Achievement", "NPC"}),
@@ -253,6 +253,55 @@ async def resolve_entity(
             exact.append((candidate, type_name))
         if not exact:
             return None
+        if reference.kind in {"raid", "dungeon"}:
+            marker = "raid" if reference.kind == "raid" else "dungeon"
+            all_zones = [
+                candidate for candidate, type_name in exact if type_name == "Zone"
+            ]
+            zones = [
+                candidate
+                for candidate in all_zones
+                if marker in " ".join(
+                    str(part) for part in candidate.get("pinBreadcrumb", [])
+                ).casefold()
+            ]
+            if not zones and len(all_zones) == 1:
+                zones = all_zones
+            if len(zones) != 1:
+                return None
+            page_candidate = zones[0]
+            icon_candidates = [
+                candidate
+                for candidate, type_name in exact
+                if type_name == "Achievement"
+                and _ICON_RE.fullmatch(str(candidate.get("icon", "")).lower())
+                and marker in " ".join(
+                    str(part) for part in candidate.get("pinBreadcrumb", [])
+                ).casefold()
+            ]
+            page_icon = str(page_candidate.get("icon") or "").lower()
+            icon = page_icon if _ICON_RE.fullmatch(page_icon) else ""
+            if not icon and icon_candidates:
+                icon_candidate = min(
+                    icon_candidates,
+                    key=lambda candidate: int(candidate.get("popularity", 10_000)),
+                )
+                icon = str(icon_candidate.get("icon") or "").lower()
+            entity_id = int(page_candidate["id"])
+            page_prefix = f"https://www.wowhead.com/{branch_path}"
+            return ResolvedWarcraftEntity(
+                branch=reference.branch,
+                kind=reference.kind,
+                external_id=entity_id,
+                canonical_name=str(page_candidate.get("name") or query).strip(),
+                localized_name=reference.label.strip(),
+                page_url=f"{page_prefix}zone={entity_id}",
+                icon_url=(
+                    f"https://wow.zamimg.com/images/wow/icons/large/{icon}.jpg"
+                    if icon
+                    else ""
+                ),
+            )
         priority = _TYPE_PRIORITY.get(reference.kind)
         if priority:
             best_rank = min(priority.index(type_name) for _candidate, type_name in exact)

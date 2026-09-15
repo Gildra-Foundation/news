@@ -9,7 +9,7 @@ _LINK_RE = re.compile(r"https?://[^\s)>]+")
 _CODE_RE = re.compile(r"`[^`]+`")
 _LATIN_WORD_RE = re.compile(r"[A-Za-z]+(?:['’][A-Za-z]+)?")
 _ALLOWED_LATIN_WORDS = frozenset(
-    {"blizzard", "forever", "world", "of", "warcraft", "wow"}
+    {"blizzard", "classic", "forever", "retail", "world", "of", "warcraft", "wow"}
 )
 WOW_EXPANSION_NAMES = (
     "The Last Titan",
@@ -106,6 +106,14 @@ _SORCERER_RE = re.compile(
 _AUGMENTATION_RE = re.compile(r"\bAugmentation\b", re.IGNORECASE)
 _RETRIBUTION_RE = re.compile(r"\bRetribution\b", re.IGNORECASE)
 _DEVASTATION_RE = re.compile(r"\bDevastation\b", re.IGNORECASE)
+_LEGACY_BRANCH_RE = re.compile(
+    r"\b(?:Timewalking|Cataclysm|Wrath of the Lich King|Mists of Pandaria|Classic)\b",
+    re.IGNORECASE,
+)
+_RETAIL_CONTEXT_RE = re.compile(
+    r"(?:основн|актуальн)\w*\s+верси\w*(?:\s+(?:игры|WoW|World of Warcraft))?|\bRetail\b",
+    re.IGNORECASE,
+)
 
 
 def _preserve_case(source: str, replacement: str) -> str:
@@ -167,6 +175,24 @@ def specialization_issues(source: str, translated: str) -> tuple[str, ...]:
     ):
         issues.append("devastation_without_evoker")
     return tuple(issues)
+
+
+def branch_context_issues(
+    source: str,
+    published_text: str,
+    branch: str,
+) -> tuple[str, ...]:
+    """Flag posts whose game branch would be ambiguous to an ordinary reader."""
+    if branch == "retail":
+        if _LEGACY_BRANCH_RE.search(source) and not _RETAIL_CONTEXT_RE.search(
+            published_text,
+        ):
+            return ("retail_branch_not_explained",)
+    elif branch == "classic" and "classic" not in published_text.casefold():
+        return ("classic_branch_not_explained",)
+    elif branch == "forever" and "wow: forever" not in published_text.casefold():
+        return ("forever_branch_not_explained",)
+    return ()
 
 
 def untranslated_terms(text: str) -> tuple[str, ...]:

@@ -355,6 +355,34 @@ async def test_luna_splits_a_valid_repair_into_readable_paragraphs() -> None:
 
 
 @pytest.mark.asyncio
+async def test_luna_explains_retail_for_legacy_timewalking_news() -> None:
+    app_server = _SequenceAppServer(
+        [
+            {
+                "is_news": True,
+                "reason": "Событие началось",
+                "title": "В Cataclysm началась неделя путешествий во времени",
+                "body": "Игрокам доступны старые подземелья и награды.",
+                "hashtag": "новости",
+            },
+            {
+                "title": "В основной версии WoW началась неделя Cataclysm",
+                "body": "Это путешествие во времени для основной версии игры, а не для Classic.",
+                "hashtag": "новости",
+            },
+        ],
+    )
+
+    result = await AppServerContentAI(app_server).filter_and_rewrite(
+        "Cataclysm Timewalking is now live in World of Warcraft.", [], [],
+    )
+
+    assert result is not None
+    assert result.title == "В основной версии WoW началась неделя Cataclysm"
+    assert "не для Classic" in result.body
+
+
+@pytest.mark.asyncio
 async def test_luna_normalizes_mage_mistranslation_before_publication() -> None:
     processor = AppServerContentAI(
         _StubAppServer(
@@ -493,9 +521,15 @@ async def test_luna_returns_typed_warcraft_entities_without_accepting_ids() -> N
             {
                 "is_news": True,
                 "reason": "Изменение способности",
-                "title": "Огненный шар усилят",
+                "title": "В Classic усилят Огненный шар",
                 "body": "Урон способности повысится.",
                 "hashtag": "классы",
+                "fingerprint": {
+                    "game_branch": "classic",
+                    "version": "",
+                    "subject": "Fireball",
+                    "action": "усилить",
+                },
                 "references": [
                     {
                         "label": "Огненный шар",

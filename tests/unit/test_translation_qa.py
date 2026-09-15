@@ -22,7 +22,9 @@ def test_untranslated_terms_detects_raid_and_ability_names() -> None:
 
 
 def test_untranslated_terms_allows_wow_and_blizzard_names() -> None:
-    assert untranslated_terms("Blizzard изменила World of Warcraft и WoW: Forever.") == ()
+    assert untranslated_terms(
+        "Blizzard изменила World of Warcraft, Retail, Classic и WoW: Forever.",
+    ) == ()
 
 
 def test_untranslated_terms_allows_common_russian_gaming_terms() -> None:

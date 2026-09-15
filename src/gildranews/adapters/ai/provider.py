@@ -14,6 +14,7 @@ from gildranews.adapters.ai.prompts import WOW_CLASS_TERMINOLOGY
 from gildranews.adapters.editor.manacost import EditorClient
 from gildranews.application.translation_qa import (
     artificial_style_markers,
+    branch_context_issues,
     check_translation,
     normalize_wow_class_terms,
     normalize_wow_expansion_names,
@@ -92,6 +93,7 @@ _RUSSIAN_REPAIR_PROMPT = """Ты — выпускающий редактор р�
 — не используй точку с запятой: она перегружает текст;
 — recent_published используй как индекс уже опубликованных сюжетов: оставь в центре только новый факт;
 — recent_voice_examples задают только длину и ритм канала; не копируй из них формулировки;
+— если branch_context_issues содержит retail_branch_not_explained, прямо напиши «основная версия WoW» и поясни, что это не Classic; для classic_branch_not_explained назови точную ветку Classic из source_text;
 — не используй «важно отметить», «таким образом», «данный материал», «открывает новые возможности» и итоговый вывод ради вывода;
 — сохрани без изменений все числа, версии, отрицания, статус события и причинно-следственные связи;
 — ничего не добавляй из памяти и не указывай источник.
@@ -400,11 +402,21 @@ class AppServerContentAI:
         style_markers = artificial_style_markers(public_text)
         layout_issues = presentation_issues(rewrite.title, rewrite.body)
         spec_issues = specialization_issues(text, public_text)
+        branch_issues = branch_context_issues(
+            text, public_text, fingerprint.game_branch,
+        )
         reference_issues = (
             *_reference_issues(text, rewrite.references),
             *_specialization_reference_issues(text, rewrite.references),
         )
-        if terms or style_markers or layout_issues or spec_issues or reference_issues:
+        if (
+            terms
+            or style_markers
+            or layout_issues
+            or spec_issues
+            or branch_issues
+            or reference_issues
+        ):
             repaired_output = await self._complete(
                 _RUSSIAN_REPAIR_PROMPT,
                 {
@@ -415,6 +427,7 @@ class AppServerContentAI:
                     "artificial_style_markers": list(style_markers),
                     "presentation_issues": list(layout_issues),
                     "specialization_issues": list(spec_issues),
+                    "branch_context_issues": list(branch_issues),
                     "reference_issues": list(reference_issues),
                     "recent_published": story_index,
                     "recent_voice_examples": voice_examples,
@@ -447,6 +460,9 @@ class AppServerContentAI:
                 or artificial_style_markers(repaired_text)
                 or presentation_issues(repaired.title, repaired.body)
                 or specialization_issues(text, repaired_text)
+                or branch_context_issues(
+                    text, repaired_text, fingerprint.game_branch,
+                )
                 or _reference_issues(text, repaired_references)
                 or _specialization_reference_issues(text, repaired_references)
             ):
