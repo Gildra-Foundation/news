@@ -173,7 +173,7 @@ async def test_luna_news_analysis_uses_full_wow_context_and_hides_source() -> No
     assert "off-piece" in app_server.system.lower()
     assert "смена внешнего вида" in app_server.system.lower()
     assert "кратко, но полно" in app_server.system.lower()
-    assert "220–550 символов" in app_server.system.lower()
+    assert "180–500 символов" in app_server.system.lower()
     assert "не вырезай условие, дату, число или исключение" in app_server.system.lower()
     assert "простыми русскими конструкциями" in app_server.system.lower()
     assert "не пиши «level 20»" in app_server.system.lower()
@@ -186,6 +186,8 @@ async def test_luna_news_analysis_uses_full_wow_context_and_hides_source() -> No
     assert "recent_voice_examples" in app_server.system
     assert "не пересказывай неизменившиеся факты" in app_server.system.lower()
     assert "не повторяй заголовок" in app_server.system.lower()
+    assert "одно предложение — одна мысль" in app_server.system.lower()
+    assert "точку с запятой" in app_server.system.lower()
 
 
 @pytest.mark.asyncio

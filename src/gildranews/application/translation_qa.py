@@ -82,6 +82,9 @@ _ARTIFICIAL_STYLE_RE = re.compile(
     re.IGNORECASE,
 )
 _SENTENCE_RE = re.compile(r"[^.!?]+(?:[.!?]+|$)")
+_TITLE_TOKEN_RE = re.compile(
+    r"\d+(?:[.,]\d+)?%?|[A-Za-zА-Яа-яЁё]+(?:-[A-Za-zА-Яа-яЁё]+)*"
+)
 _MAGE_RE = re.compile(r"(?<![A-Za-z])mage(?![A-Za-z])", re.IGNORECASE)
 _WARLOCK_RE = re.compile(r"(?<![A-Za-z])warlock(?![A-Za-z])", re.IGNORECASE)
 _SORCERER_FORMS = {
@@ -201,14 +204,19 @@ def presentation_issues(title: str, body: str) -> tuple[str, ...]:
     ).casefold().strip()
     paragraphs = [part.strip() for part in re.split(r"\n\s*\n", body) if part.strip()]
     sentences = [match.group(0).strip() for match in _SENTENCE_RE.finditer(body)]
+    title_words = _TITLE_TOKEN_RE.findall(title)
 
-    if len(body) > 750:
+    if len(title_words) > 9:
+        issues.append("title_too_long")
+    if len(body) > 650:
         issues.append("body_too_long")
     if clean_title and clean_first.startswith(clean_title):
         issues.append("title_repeated_at_start")
-    if any(len(sentence) > 260 for sentence in sentences):
+    if any(len(sentence) > 180 for sentence in sentences):
         issues.append("sentence_too_long")
-    if any(len(paragraph) > 500 for paragraph in paragraphs):
+    if any(";" in sentence for sentence in sentences):
+        issues.append("sentence_too_complex")
+    if any(len(paragraph) > 300 for paragraph in paragraphs):
         issues.append("paragraph_too_dense")
     if len(paragraphs) > 3:
         issues.append("too_many_paragraphs")

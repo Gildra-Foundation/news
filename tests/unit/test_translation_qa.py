@@ -113,3 +113,41 @@ def test_presentation_issues_detects_verbatim_title_and_dense_body() -> None:
         "sentence_too_long",
         "paragraph_too_dense",
     )
+
+
+def test_presentation_issues_rejects_hard_to_read_sentence() -> None:
+    body = "Изменение " + "затронет игроков во всех режимах " * 6 + "."
+
+    assert "sentence_too_long" in presentation_issues("Новое изменение", body)
+
+
+def test_presentation_issues_rejects_semicolon_clause_chain() -> None:
+    body = (
+        "На старте дадут 16 очков; позже Blizzard добавит новые деревья."
+    )
+
+    assert presentation_issues("Система наследия", body) == (
+        "sentence_too_complex",
+    )
+
+
+def test_presentation_issues_rejects_single_overloaded_paragraph() -> None:
+    body = " ".join("Каждая фраза сообщает новый факт." for _ in range(10))
+
+    assert presentation_issues("Изменения босса", body) == (
+        "paragraph_too_dense",
+    )
+
+
+def test_presentation_issues_rejects_overloaded_title() -> None:
+    title = "Blizzard объявила новые изменения для всех классов в следующем обновлении"
+
+    assert presentation_issues(title, "Изменения выйдут на следующей неделе.") == (
+        "title_too_long",
+    )
+
+
+def test_presentation_issues_counts_decimal_percentage_as_one_title_word() -> None:
+    title = "90,46% эпохальных ключей закрыли вовремя на третьей неделе сезона"
+
+    assert presentation_issues(title, "Доля успешных прохождений выросла.") == ()
