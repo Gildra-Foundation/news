@@ -405,6 +405,43 @@ async def recent_published_context(
     ]
 
 
+async def published_posts_after(
+    *,
+    after_message_id: int,
+    search: str,
+    limit: int = 30,
+) -> list[dict[str, object]]:
+    """Return newer channel posts matching a topic for a living guide."""
+    bounded_limit = max(1, min(limit, 100))
+    pattern = f"%{search[:100]}%"
+    db = await _get_conn()
+    async with db.execute(
+        """SELECT title, target_message_id, posted_at FROM published_posts
+           WHERE target_message_id > ? AND target_message_id IS NOT NULL
+             AND (title LIKE ? OR body LIKE ?)
+           ORDER BY target_message_id DESC LIMIT ?""",
+        (after_message_id, pattern, pattern, bounded_limit),
+    ) as cursor:
+        rows = await cursor.fetchall()
+    return [
+        {"title": row[0], "target_message_id": row[1], "posted_at": row[2]}
+        for row in rows
+    ]
+
+
+async def ready_custom_emoji_id(canonical_name: str) -> str:
+    db = await _get_conn()
+    async with db.execute(
+        """SELECT a.custom_emoji_id FROM warcraft_entities e
+           JOIN telegram_emoji_assets a ON a.sha256=e.icon_sha256
+           WHERE e.canonical_name=? AND a.status='ready'
+           ORDER BY a.id DESC LIMIT 1""",
+        (canonical_name[:200],),
+    ) as cursor:
+        row = await cursor.fetchone()
+    return str(row[0]) if row and row[0] else ""
+
+
 # ---------- Warcraft entities / Telegram custom emoji ----------
 async def upsert_warcraft_entity(
     entity: ResolvedWarcraftEntity,

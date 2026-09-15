@@ -732,7 +732,14 @@ async def run_bot() -> None:
                 f"Backup-поллинг каждые {cfg.interval_minutes} мин подхватит."
             )
 
-    jobs = ScheduledJobs(tele_client, bot, cfg, _notify_admin, content_ai)
+    jobs = ScheduledJobs(
+        tele_client,
+        bot,
+        cfg,
+        _notify_admin,
+        content_ai,
+        publisher_client=mtproto_client,
+    )
     jobs.start()
 
     try:

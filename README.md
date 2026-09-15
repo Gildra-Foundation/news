@@ -370,6 +370,9 @@ EMOJI_AUTOCREATE_ENABLED=true
 EMOJI_MAX_NEW_PER_DAY=10
 EMOJI_UPLOAD_TIMEOUT_SECONDS=15
 SUBSCRIBE_EMOJI_ID=5280756831252167912
+FOREVER_GUIDE_MESSAGE_ID=44
+FOREVER_GUIDE_REFRESH_MINUTES=30
+FOREVER_RELEASE_DATE=2026-11-04
 ```
 
 Реестр игровых сущностей, хэшей изображений, очереди и `custom_emoji_id`
@@ -379,6 +382,11 @@ SUBSCRIBE_EMOJI_ID=5280756831252167912
 Отпечатки сюжетов и суточные квоты Reddit/X также хранятся в SQLite. Один и
 тот же сюжет из разных источников резервируется атомарно, а перезапуск бота не
 обнуляет лимит в два поста Reddit и два поста X за сутки.
+
+Если задан `FOREVER_GUIDE_MESSAGE_ID`, бот каждые 30 минут обновляет закреплённое
+оглавление ссылками на новые публикации о WoW: Forever. Редактирование идёт через
+MTProto, поэтому Premium Emoji сохраняются, а в дату `FOREVER_RELEASE_DATE`
+автоматическое пополнение прекращается.
 
 ---
 

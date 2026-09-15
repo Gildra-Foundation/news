@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -68,6 +69,16 @@ def _hours(key: str, default: tuple[int, ...]) -> tuple[int, ...]:
     return hours
 
 
+def _date(key: str, default: date) -> date:
+    raw = os.getenv(key, "").strip()
+    if not raw:
+        return default
+    try:
+        return date.fromisoformat(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{key} должен быть датой YYYY-MM-DD") from exc
+
+
 def _secret(key: str, file_key: str, default_file: str) -> str:
     direct = os.getenv(key, "").strip()
     if direct:
@@ -129,6 +140,9 @@ class Config:
     emoji_upload_timeout_seconds: int = 15
     scrape_do_enabled: bool = False
     subscribe_emoji_id: str = ""
+    forever_guide_message_id: int = 0
+    forever_guide_refresh_minutes: int = 30
+    forever_release_date: date = date(2026, 11, 4)
 
 def load() -> Config:
     target = _required("TARGET_CHANNEL")
@@ -258,4 +272,13 @@ def load() -> Config:
         ),
         scrape_do_enabled=scrape_do_enabled,
         subscribe_emoji_id=os.getenv("SUBSCRIBE_EMOJI_ID", "").strip(),
+        forever_guide_message_id=_bounded_int(
+            "FOREVER_GUIDE_MESSAGE_ID", 0, minimum=0, maximum=2_147_483_647,
+        ),
+        forever_guide_refresh_minutes=_bounded_int(
+            "FOREVER_GUIDE_REFRESH_MINUTES", 30, minimum=5, maximum=1_440,
+        ),
+        forever_release_date=_date(
+            "FOREVER_RELEASE_DATE", date(2026, 11, 4),
+        ),
     )

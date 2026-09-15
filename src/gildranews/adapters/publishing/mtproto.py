@@ -51,6 +51,31 @@ async def publish(
     return getattr(first, "id", None)
 
 
+async def edit(
+    client: TelegramClient,
+    target_channel: str,
+    message_id: int,
+    text: str,
+) -> bool:
+    """Edit an existing channel post while preserving Premium Emoji entities."""
+    plain_text, entities = html.parse(text)
+    await client.edit_message(
+        target_channel,
+        message_id,
+        plain_text,
+        formatting_entities=entities,
+        link_preview=False,
+    )
+    updated = await client.get_messages(target_channel, ids=message_id)
+    expected_ids = {int(value) for value in _CUSTOM_EMOJI_ID_RE.findall(text)}
+    actual_ids = {
+        entity.document_id
+        for entity in (getattr(updated, "entities", None) or ())
+        if isinstance(entity, types.MessageEntityCustomEmoji)
+    }
+    return expected_ids.issubset(actual_ids)
+
+
 async def restore_rich_message_custom_emojis(
     client: TelegramClient,
     target_channel: str,
