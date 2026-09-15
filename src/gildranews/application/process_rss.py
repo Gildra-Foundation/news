@@ -11,6 +11,7 @@ from aiogram import Bot
 
 from gildranews.adapters import media as media_downloader
 from gildranews.adapters.emoji import catalog as emoji_store
+from gildranews.adapters.media import scrape_do_images
 from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.publishing import telegram as tg_writer
 from gildranews.adapters.references import wowhead as wowhead_references
@@ -168,6 +169,36 @@ async def process_item(
                             kind,
                             exc_info=True,
                         )
+            if not media and cfg.scrape_do_enabled:
+                primary_reference = next(
+                    (
+                        reference for reference in analysis.references
+                        if reference.role == "primary"
+                    ),
+                    analysis.references[0] if analysis.references else None,
+                )
+                image_query = (
+                    primary_reference.query if primary_reference is not None else item.title
+                )
+                try:
+                    searched_image = await scrape_do_images.find_warcraft_image(
+                        image_query,
+                    )
+                    if searched_image:
+                        source_path = await media_downloader.download(
+                            searched_image,
+                            media_dir,
+                            kind="photo",
+                            allowed_hosts=set(scrape_do_images.ALLOWED_IMAGE_HOSTS),
+                        )
+                        media.append((str(source_path), "photo"))
+                except Exception:
+                    log.warning(
+                        "Scrape.do image discovery failed for %s/%s",
+                        item.source,
+                        item.external_id,
+                        exc_info=True,
+                    )
             if not media and analysis.infographic is not None:
                 infographic_path = media_dir / "infographic.png"
                 rendered = await asyncio.to_thread(

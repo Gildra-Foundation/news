@@ -245,6 +245,81 @@ async def test_icy_veins_uses_article_raid_cover_instead_of_infographic(
 
 
 @pytest.mark.asyncio
+async def test_scrape_do_finds_entity_image_before_infographic_fallback(
+    monkeypatch,
+) -> None:
+    published: dict = {}
+
+    async def claim_message(_channel: str, _message_id: int) -> bool:
+        return True
+
+    async def recent_context(hours: int, limit: int) -> list[dict[str, str]]:
+        assert (hours, limit) == (48, 50)
+        return []
+
+    async def find_image(query: str) -> str:
+        assert query == "Venomous Abyss"
+        return "https://static.icy-veins.com/wp/venomous-abyss-raid.webp"
+
+    async def download(url, destination_dir, *, kind, allowed_hosts):
+        assert url.endswith("venomous-abyss-raid.webp")
+        assert kind == "photo"
+        assert allowed_hosts == {"static.icy-veins.com", "wow.zamimg.com"}
+        return destination_dir / "searched-raid.webp"
+
+    async def enrich(*_args, **_kwargs):
+        return WarcraftEnrichment()
+
+    async def publish(_bot, _target_channel, text, media_files=None) -> int:
+        published.update(text=text, media_files=media_files)
+        return 89
+
+    async def record_published(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(process_rss.db, "claim_message", claim_message)
+    monkeypatch.setattr(process_rss.db, "recent_published_context", recent_context)
+    monkeypatch.setattr(process_rss.db, "record_published", record_published)
+    monkeypatch.setattr(process_rss.emoji_store, "load", dict)
+    monkeypatch.setattr(process_rss.emoji_store, "themes_for_prompt", lambda _emap: [])
+    monkeypatch.setattr(process_rss.warcraft_enrichment, "enrich", enrich)
+    monkeypatch.setattr(process_rss.scrape_do_images, "find_warcraft_image", find_image)
+    monkeypatch.setattr(process_rss.media_downloader, "download", download)
+    monkeypatch.setattr(process_rss.tg_writer, "publish", publish)
+
+    cfg = Config(
+        tg_api_id=0,
+        tg_api_hash="",
+        bot_token="token",
+        target_channel="@gildrawow",
+        admin_user_id=1,
+        gemini_api_key="",
+        gemini_model="model",
+        lookback_minutes=120,
+        interval_minutes=30,
+        max_posts_per_run=3,
+        emoji_autocreate_enabled=True,
+        scrape_do_enabled=True,
+    )
+    item = RSSItem(
+        source="reddit:wow",
+        external_id=12345,
+        title="Massive Venomous Abyss Raid Tuning",
+        content="Fragments reduced by 25%; eight spawns remain.",
+        published_at=datetime.now(UTC),
+        article_url="https://www.reddit.com/r/wow/comments/9ix/",
+    )
+
+    result = await process_rss.process_item(
+        bot=object(), cfg=cfg, item=item, content_ai=RaidNewsAI(),
+    )
+
+    assert result.status == "published"
+    assert len(published["media_files"]) == 1
+    assert published["media_files"][0][0].endswith("/searched-raid.webp")
+
+
+@pytest.mark.asyncio
 async def test_process_rss_item_releases_claim_when_ai_is_temporarily_unavailable(
     monkeypatch,
 ) -> None:
