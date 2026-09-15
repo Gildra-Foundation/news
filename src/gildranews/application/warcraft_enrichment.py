@@ -1,0 +1,95 @@
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from pathlib import Path
+
+import httpx
+from aiogram import Bot
+
+from gildranews.adapters.references import wowhead
+from gildranews.adapters.warcraft.emoji_registry import (
+    TelegramEmojiRegistry,
+    pick_fallback,
+)
+from gildranews.adapters.warcraft.icons import IconError, fetch_and_normalize_icon
+from gildranews.config import Config
+from gildranews.domain.models import TelegramEmojiAsset, WarcraftEntityRef
+
+log = logging.getLogger(__name__)
+
+_KIND_PRIORITY = {
+    "spell": 0,
+    "talent": 1,
+    "item": 2,
+    "boss": 3,
+    "class": 4,
+    "specialization": 5,
+    "raid": 6,
+    "dungeon": 7,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class WarcraftEnrichment:
+    inline_links: tuple[tuple[str, str], ...] = ()
+    emojis: tuple[TelegramEmojiAsset, ...] = ()
+
+
+async def enrich(
+    bot: Bot,
+    cfg: Config,
+    references: tuple[WarcraftEntityRef, ...],
+) -> WarcraftEnrichment:
+    if not references:
+        return WarcraftEnrichment()
+    ordered = sorted(
+        references[:3],
+        key=lambda ref: (
+            0 if ref.role == "primary" else 1,
+            _KIND_PRIORITY.get(ref.kind, 20),
+        ),
+    )
+    registry = TelegramEmojiRegistry(
+        bot,
+        owner_user_id=cfg.admin_user_id,
+        enabled=cfg.emoji_autocreate_enabled,
+        set_prefix=cfg.emoji_set_prefix,
+        daily_upload_limit=cfg.emoji_max_new_per_day,
+        upload_timeout_seconds=cfg.emoji_upload_timeout_seconds,
+    )
+    icon_dir = Path(cfg.emoji_icon_dir)
+    links: list[tuple[str, str]] = []
+    emojis: list[TelegramEmojiAsset] = []
+    async with httpx.AsyncClient(
+        timeout=20,
+        headers={"User-Agent": "GildraNews/0.1 Warcraft enrichment"},
+    ) as client:
+        for reference in ordered:
+            try:
+                entity = await wowhead.resolve_entity(reference, http_client=client)
+            except Exception:
+                log.warning("Warcraft entity lookup failed for %s", reference.query, exc_info=True)
+                continue
+            if entity is None:
+                continue
+            links.append((reference.label, entity.page_url))
+            if len(emojis) >= 2 or not entity.icon_url:
+                continue
+            try:
+                icon = await fetch_and_normalize_icon(
+                    entity.icon_url,
+                    icon_dir,
+                    http_client=client,
+                )
+                asset = await registry.get_or_create(
+                    entity,
+                    icon,
+                    fallback=pick_fallback(entity.kind),
+                )
+            except (IconError, OSError, httpx.HTTPError):
+                log.warning("Warcraft icon enrichment failed for %s", entity.key, exc_info=True)
+                continue
+            if asset is not None:
+                emojis.append(asset)
+    return WarcraftEnrichment(tuple(links), tuple(emojis))

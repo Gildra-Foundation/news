@@ -14,6 +14,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo, Message
 
 from gildranews.adapters.persistence import sqlite as db
+from gildranews.domain.models import TelegramEmojiAsset
 
 log = logging.getLogger(__name__)
 
@@ -33,7 +34,13 @@ HASHTAGS = {
     "дайджест": "#дайджест",
 }
 DEFAULT_HASHTAG_KEY = "полезное"
-_WOWHEAD_ENTITY_PATH_RE = re.compile(r"^/(?:zone|npc)=\d+$")
+_WOWHEAD_ENTITY_PATH_RE = re.compile(
+    r"^/(?:classic/)?(?:achievement|item|npc|spell|transmog-set|zone)=\d+$"
+)
+_CUSTOM_EMOJI_RE = re.compile(
+    r'<tg-emoji\s+emoji-id="[0-9]+">(.*?)</tg-emoji>',
+    re.DOTALL,
+)
 
 
 def _is_admin(message: Message, admin_id: int) -> bool:
@@ -66,6 +73,9 @@ def make_dispatcher(admin_id: int, target_channel: str) -> Dispatcher:
             "/add @канал — добавить источник\n"
             "/remove @канал — удалить источник\n"
             "/status — последний прогон\n"
+            "/emojis — состояние игровых эмодзи\n"
+            "/emoji_retry ID — повторить загрузку\n"
+            "/emoji_disable ID — отключить загрузку\n"
             "/run — запустить прогон вручную\n"
             "/test [@канал] — взять последний пост, рерайт и опубликовать\n"
             "/digest — еженедельный дайджест канала за 7 дней\n"
@@ -122,6 +132,45 @@ def make_dispatcher(admin_id: int, target_channel: str) -> Dispatcher:
         if run["error"]:
             lines.append(f"Ошибка: {run['error']}")
         await message.answer("\n".join(lines))
+
+    @dp.message(Command("emojis"))
+    async def cmd_emojis(message: Message) -> None:
+        if not _is_admin(message, admin_id):
+            return
+        assets = await db.list_emoji_assets(limit=20)
+        if not assets:
+            await message.answer("Игровых Custom Emoji в реестре пока нет.")
+            return
+        lines = ["Последние игровые Custom Emoji:"]
+        for asset in assets:
+            suffix = f" — {html_escape(asset['last_error'])}" if asset["last_error"] else ""
+            lines.append(
+                f"<code>{asset['id']}</code> {asset['fallback']} "
+                f"{asset['status']} ({asset['attempts']}/5){suffix}"
+            )
+        await message.answer("\n".join(lines))
+
+    @dp.message(Command("emoji_retry"))
+    async def cmd_emoji_retry(message: Message) -> None:
+        if not _is_admin(message, admin_id):
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) != 2 or not parts[1].isdigit():
+            await message.answer("Использование: <code>/emoji_retry ID</code>")
+            return
+        changed = await db.retry_emoji_asset(int(parts[1]))
+        await message.answer("Поставлен в очередь." if changed else "Эмодзи не найден.")
+
+    @dp.message(Command("emoji_disable"))
+    async def cmd_emoji_disable(message: Message) -> None:
+        if not _is_admin(message, admin_id):
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) != 2 or not parts[1].isdigit():
+            await message.answer("Использование: <code>/emoji_disable ID</code>")
+            return
+        changed = await db.disable_emoji_asset(int(parts[1]))
+        await message.answer("Отключён." if changed else "Эмодзи не найден.")
 
     # /run и /test регистрируются в main.py
     return dp
@@ -189,6 +238,7 @@ def format_post(
     tail_url: str | None = None,
     hashtag_key: str = "",
     inline_links: Sequence[tuple[str, str]] | None = None,
+    custom_emojis: Sequence[TelegramEmojiAsset] | None = None,
 ) -> str:
     """Финальный пост:
     <b>Title</b> [theme-emoji]\\n\\n
@@ -202,8 +252,18 @@ def format_post(
     if len(body) > BODY_HARD_LIMIT:
         body = _smart_truncate(body, BODY_HARD_LIMIT)
 
+    safe_custom_emojis = [
+        asset for asset in (custom_emojis or ())
+        if asset.custom_emoji_id.isdigit() and asset.fallback
+    ][:2]
     theme_prefix = ""
-    if emoji_theme and emoji_map:
+    if safe_custom_emojis:
+        asset = safe_custom_emojis[0]
+        theme_prefix = (
+            f'<tg-emoji emoji-id="{asset.custom_emoji_id}">'
+            f"{html_escape(asset.fallback)}</tg-emoji> "
+        )
+    elif emoji_theme and emoji_map:
         info = emoji_map.get(emoji_theme)
         if info and info.get("id") and info.get("fallback"):
             fb = html_escape(info["fallback"])
@@ -219,6 +279,12 @@ def format_post(
 
     blocks: list[str] = []
     blocks.append(f"{theme_prefix}<b>{title_html}</b>")
+    if len(safe_custom_emojis) > 1:
+        asset = safe_custom_emojis[1]
+        body_html = (
+            f'<tg-emoji emoji-id="{asset.custom_emoji_id}">'
+            f"{html_escape(asset.fallback)}</tg-emoji> {body_html}"
+        )
     blocks.append(body_html)
 
     if tail_url:
@@ -262,6 +328,11 @@ def _smart_truncate(body: str, limit: int) -> str:
         return body[:space].rstrip() + "…"
     # 4) Совсем худо — режем по символам
     return head.rstrip() + "…"
+
+
+def without_custom_emojis(text: str) -> str:
+    """Keep readable Unicode fallbacks while removing Bot API custom entities."""
+    return _CUSTOM_EMOJI_RE.sub(r"\1", text)
 
 
 async def _publish_once(
@@ -310,24 +381,34 @@ async def publish(
     text: str,
     media_files: list[tuple[str, str]] | None = None,
 ) -> int | None:
-    """Публикует пост. Возвращает message_id поста в канале (для построения ссылок)
-    или None при отказе. Один retry при TelegramRetryAfter."""
+    """Publish once, retrying rate limits or invalid Custom Emoji safely."""
     import asyncio as _asyncio
 
-    for attempt in (0, 1):
+    current_text = text
+    rate_retried = False
+    emoji_retried = False
+    for attempt in range(3):
         try:
-            return await _publish_once(bot, target_channel, text, media_files)
+            return await _publish_once(bot, target_channel, current_text, media_files)
         except TelegramRetryAfter as e:
             wait = min(int(e.retry_after) + 1, 60)
             log.warning(
                 "Bot API rate limit, attempt=%d, retry_after=%ds (wait=%ds)",
                 attempt, e.retry_after, wait,
             )
-            if attempt == 0:
+            if not rate_retried:
+                rate_retried = True
                 await _asyncio.sleep(wait)
                 continue
             return None
         except TelegramAPIError:
+            if not emoji_retried and _CUSTOM_EMOJI_RE.search(current_text):
+                emoji_retried = True
+                current_text = without_custom_emojis(current_text)
+                log.exception(
+                    "Telegram rejected a post with Custom Emoji; retrying with Unicode"
+                )
+                continue
             log.exception("Не удалось опубликовать")
             return None
     return None

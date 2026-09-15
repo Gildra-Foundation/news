@@ -119,6 +119,11 @@ class Config:
     x_api_key: str = ""
     x_search_query: str = DEFAULT_X_SEARCH_QUERY
     x_max_posts_per_run: int = 1
+    emoji_autocreate_enabled: bool = False
+    emoji_set_prefix: str = "gildra_warcraft"
+    emoji_icon_dir: str = "data/emoji_icons"
+    emoji_max_new_per_day: int = 10
+    emoji_upload_timeout_seconds: int = 15
 
 def load() -> Config:
     target = _required("TARGET_CHANNEL")
@@ -217,5 +222,20 @@ def load() -> Config:
         x_search_query=x_search_query,
         x_max_posts_per_run=_bounded_int(
             "X_MAX_POSTS_PER_RUN", 1, minimum=1, maximum=2,
+        ),
+        emoji_autocreate_enabled=_bool("EMOJI_AUTOCREATE_ENABLED"),
+        emoji_set_prefix=(
+            os.getenv("EMOJI_SET_PREFIX", "gildra_warcraft").strip()
+            or "gildra_warcraft"
+        ),
+        emoji_icon_dir=(
+            os.getenv("EMOJI_ICON_DIR", "data/emoji_icons").strip()
+            or "data/emoji_icons"
+        ),
+        emoji_max_new_per_day=_bounded_int(
+            "EMOJI_MAX_NEW_PER_DAY", 10, minimum=1, maximum=100,
+        ),
+        emoji_upload_timeout_seconds=_bounded_int(
+            "EMOJI_UPLOAD_TIMEOUT_SECONDS", 15, minimum=1, maximum=60,
         ),
     )

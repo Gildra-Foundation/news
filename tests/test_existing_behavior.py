@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.methods import SendMessage
+
 from gildranews.adapters.ai import gemini as ai
 from gildranews.adapters.emoji import catalog as emoji_store
 from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.publishing import telegram as tg_writer
+from gildranews.domain.models import TelegramEmojiAsset
 
 
 def test_source_normalization_accepts_common_telegram_formats() -> None:
@@ -56,6 +63,49 @@ def test_post_formatter_embeds_only_safe_wowhead_reference() -> None:
     )
     assert "evil.example" not in result
     assert "рейд &amp; получить" in result
+
+
+def test_post_formatter_uses_at_most_two_warcraft_custom_emojis() -> None:
+    assets = [
+        TelegramEmojiAsset(str(index), f"file-{index}", "set", "⚔️")
+        for index in range(1, 4)
+    ]
+
+    result = tg_writer.format_post(
+        title="Огненный шар усилят",
+        body="Урон заклинания вырастет.",
+        custom_emojis=assets,
+    )
+
+    assert result.count("<tg-emoji ") == 2
+    assert result.startswith('<tg-emoji emoji-id="1">⚔️</tg-emoji> <b>')
+    assert '\n\n<tg-emoji emoji-id="2">⚔️</tg-emoji> Урон' in result
+    assert 'emoji-id="3"' not in result
+
+
+@pytest.mark.asyncio
+async def test_publish_retries_without_custom_emoji_when_telegram_rejects_it() -> None:
+    texts: list[str] = []
+
+    class Bot:
+        async def send_message(self, **kwargs):
+            texts.append(kwargs["text"])
+            if len(texts) == 1:
+                raise TelegramBadRequest(
+                    method=SendMessage(chat_id="@channel", text=kwargs["text"]),
+                    message="Bad Request: can't parse entities",
+                )
+            return SimpleNamespace(message_id=91)
+
+    result = await tg_writer.publish(
+        Bot(),
+        "@channel",
+        '<tg-emoji emoji-id="123">⚔️</tg-emoji> <b>Заголовок</b>',
+    )
+
+    assert result == 91
+    assert len(texts) == 2
+    assert texts[1] == "⚔️ <b>Заголовок</b>"
 
 
 def test_emoji_override_ignores_invalid_patterns_and_finds_valid_match() -> None:

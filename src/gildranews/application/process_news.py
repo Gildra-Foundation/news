@@ -14,6 +14,7 @@ from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.publishing import telegram as tg_writer
 from gildranews.adapters.rendering.svg_infographic import render_png
 from gildranews.adapters.sources import telegram as tg_reader
+from gildranews.application import warcraft_enrichment
 from gildranews.application.ports import NewsFilter
 from gildranews.config import Config
 from gildranews.domain.models import ProcessResult
@@ -148,10 +149,27 @@ async def process_post(
             )
             if override:
                 emoji_theme = override
+            inline_links = ()
+            custom_emojis = ()
+            if cfg.emoji_autocreate_enabled and filt.references:
+                try:
+                    async with asyncio.timeout(cfg.emoji_upload_timeout_seconds):
+                        enrichment = await warcraft_enrichment.enrich(
+                            bot, cfg, filt.references,
+                        )
+                    inline_links = enrichment.inline_links
+                    custom_emojis = enrichment.emojis
+                except Exception:
+                    log.warning(
+                        "Warcraft enrichment failed; using ordinary formatting",
+                        exc_info=True,
+                    )
             text = tg_writer.format_post(
                 filt.title, filt.body,
                 emoji_theme=emoji_theme, emoji_map=emoji_map,
                 hashtag_key=filt.hashtag,
+                inline_links=inline_links,
+                custom_emojis=custom_emojis,
             )
             target_msg_id = await tg_writer.publish(bot, cfg.target_channel, text, media)
         if target_msg_id:

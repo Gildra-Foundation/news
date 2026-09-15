@@ -62,6 +62,8 @@ def format_draft_text(draft: dict) -> str:
         original_url=original_url,
         tail_url=draft_tail_url(draft),
         hashtag_key=draft.get("hashtag") or "",
+        inline_links=draft.get("inline_links") or (),
+        custom_emojis=draft.get("custom_emojis") or (),
     )
 
 
@@ -95,6 +97,7 @@ async def send_preview(bot: Bot, chat_id: int, draft_id: int) -> None:
             sent = True
         except TelegramAPIError as error:
             log.warning("Не удалось отправить превью с медиа: %s — fallback text", error)
+            text = telegram_publisher.without_custom_emojis(text)
 
     if not sent:
         await bot.send_message(

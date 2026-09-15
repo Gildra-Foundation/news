@@ -13,6 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.rendering import cards
+from gildranews.adapters.warcraft.emoji_registry import TelegramEmojiRegistry
 from gildranews.application import digest, process_reddit, process_rss, process_x
 from gildranews.application.ports import ContentAI
 from gildranews.config import Config
@@ -97,6 +98,21 @@ class ScheduledJobs:
             await self.run_reddit_pipeline()
         if self._cfg.x_enabled:
             await self.run_x_pipeline()
+
+    async def retry_custom_emojis(self) -> None:
+        if not self._cfg.emoji_autocreate_enabled:
+            return
+        registry = TelegramEmojiRegistry(
+            self._bot,
+            owner_user_id=self._cfg.admin_user_id,
+            enabled=True,
+            set_prefix=self._cfg.emoji_set_prefix,
+            daily_upload_limit=self._cfg.emoji_max_new_per_day,
+            upload_timeout_seconds=self._cfg.emoji_upload_timeout_seconds,
+        )
+        completed = await registry.retry_due(limit=2)
+        if completed:
+            log.info("Custom Emoji queue: uploaded=%d", completed)
 
     async def cleanup(self) -> None:
         try:
@@ -184,6 +200,15 @@ class ScheduledJobs:
                     max_instances=1,
                     coalesce=True,
                 )
+            if self._cfg.emoji_autocreate_enabled:
+                self._scheduler.add_job(
+                    self.retry_custom_emojis,
+                    trigger="interval",
+                    minutes=5,
+                    id="custom_emoji_retry",
+                    max_instances=1,
+                    coalesce=True,
+                )
             self._scheduler.start()
             if self._client is not None:
                 log.info(
@@ -202,6 +227,8 @@ class ScheduledJobs:
         if self._client is not None:
             self._start_task(self.run_pipeline())
         self._start_task(self.cleanup())
+        if self._cfg.emoji_autocreate_enabled:
+            self._start_task(self.retry_custom_emojis())
 
     def _start_task(self, coroutine) -> None:
         task = asyncio.create_task(coroutine)

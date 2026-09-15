@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 import aiosqlite
 
@@ -87,6 +88,8 @@ CREATE TABLE IF NOT EXISTS drafts (
     body TEXT NOT NULL,
     image_url TEXT,
     original_text TEXT,
+    inline_links_json TEXT NOT NULL DEFAULT '[]',
+    custom_emojis_json TEXT NOT NULL DEFAULT '[]',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS pending_edits (
@@ -151,6 +154,14 @@ async def init() -> None:
         await db.execute("ALTER TABLE drafts ADD COLUMN media_type TEXT DEFAULT 'photo'")
     if "hashtag" not in cols:
         await db.execute("ALTER TABLE drafts ADD COLUMN hashtag TEXT DEFAULT ''")
+    if "inline_links_json" not in cols:
+        await db.execute(
+            "ALTER TABLE drafts ADD COLUMN inline_links_json TEXT NOT NULL DEFAULT '[]'"
+        )
+    if "custom_emojis_json" not in cols:
+        await db.execute(
+            "ALTER TABLE drafts ADD COLUMN custom_emojis_json TEXT NOT NULL DEFAULT '[]'"
+        )
     # Миграция published_posts: target_message_id (id поста в нашем канале — для ссылок в дайджесте)
     async with db.execute("PRAGMA table_info(published_posts)") as cur:
         pcols = {row[1] async for row in cur}
@@ -547,6 +558,33 @@ async def list_emoji_assets(limit: int = 20) -> list[dict]:
     return [dict(zip(keys, row, strict=True)) for row in rows]
 
 
+async def due_emoji_uploads(limit: int = 2) -> list[dict]:
+    db = await _get_conn()
+    async with db.execute(
+        """SELECT a.sha256, a.source_url, a.local_path, a.fallback,
+                  e.branch, e.kind, e.external_id, e.canonical_name,
+                  e.localized_name, e.page_url, e.icon_url
+           FROM telegram_emoji_assets a
+           JOIN warcraft_entities e ON e.icon_sha256 = a.sha256
+           WHERE a.attempts < 5 AND (
+               a.status='queued'
+               OR (a.status='failed' AND (
+                   a.next_retry_at IS NULL OR a.next_retry_at <= CURRENT_TIMESTAMP
+               ))
+           )
+           GROUP BY a.sha256
+           ORDER BY a.id
+           LIMIT ?""",
+        (max(1, min(limit, 10)),),
+    ) as cur:
+        rows = await cur.fetchall()
+    keys = [
+        "sha256", "source_url", "local_path", "fallback", "branch", "kind",
+        "external_id", "canonical_name", "localized_name", "page_url", "icon_url",
+    ]
+    return [dict(zip(keys, row, strict=True)) for row in rows]
+
+
 async def retry_emoji_asset(asset_id: int) -> bool:
     db = await _get_conn()
     cur = await db.execute(
@@ -580,12 +618,31 @@ async def create_draft(
     original_text: str,
     media_type: str = "photo",
     hashtag: str = "",
+    inline_links: Sequence[tuple[str, str]] = (),
+    custom_emojis: Sequence[TelegramEmojiAsset] = (),
 ) -> int:
     db = await _get_conn()
+    links_json = json.dumps(list(inline_links), ensure_ascii=False)
+    emojis_json = json.dumps(
+        [
+            {
+                "custom_emoji_id": asset.custom_emoji_id,
+                "file_id": asset.file_id,
+                "sticker_set_name": asset.sticker_set_name,
+                "fallback": asset.fallback,
+            }
+            for asset in custom_emojis[:2]
+        ],
+        ensure_ascii=False,
+    )
     cur = await db.execute(
         "INSERT INTO drafts(source_url, title, body, image_url, original_text, "
-        "media_type, hashtag) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (source_url, title, body, image_url, original_text, media_type, hashtag),
+        "media_type, hashtag, inline_links_json, custom_emojis_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            source_url, title, body, image_url, original_text, media_type, hashtag,
+            links_json, emojis_json,
+        ),
     )
     await db.commit()
     return cur.lastrowid
@@ -596,20 +653,57 @@ async def get_draft(draft_id: int) -> dict | None:
     async with db.execute(
         "SELECT id, source_url, title, body, image_url, original_text, "
         "COALESCE(include_original, 0), COALESCE(media_type, 'photo'), "
-        "COALESCE(hashtag, '') "
+        "COALESCE(hashtag, ''), COALESCE(inline_links_json, '[]'), "
+        "COALESCE(custom_emojis_json, '[]') "
         "FROM drafts WHERE id = ?",
         (draft_id,),
     ) as cur:
         row = await cur.fetchone()
     if not row:
         return None
+    try:
+        inline_links = [tuple(item) for item in json.loads(row[9])]
+    except (json.JSONDecodeError, TypeError, ValueError):
+        inline_links = []
+    try:
+        custom_emojis = [TelegramEmojiAsset(**item) for item in json.loads(row[10])]
+    except (json.JSONDecodeError, TypeError, ValueError):
+        custom_emojis = []
     return {
         "id": row[0], "source_url": row[1], "title": row[2],
         "body": row[3], "image_url": row[4], "original_text": row[5],
         "include_original": bool(row[6]),
         "media_type": row[7],
         "hashtag": row[8],
+        "inline_links": inline_links,
+        "custom_emojis": custom_emojis,
     }
+
+
+async def set_draft_enrichment(
+    draft_id: int,
+    inline_links: Sequence[tuple[str, str]],
+    custom_emojis: Sequence[TelegramEmojiAsset],
+) -> None:
+    links_json = json.dumps(list(inline_links), ensure_ascii=False)
+    emojis_json = json.dumps(
+        [
+            {
+                "custom_emoji_id": asset.custom_emoji_id,
+                "file_id": asset.file_id,
+                "sticker_set_name": asset.sticker_set_name,
+                "fallback": asset.fallback,
+            }
+            for asset in custom_emojis[:2]
+        ],
+        ensure_ascii=False,
+    )
+    db = await _get_conn()
+    await db.execute(
+        "UPDATE drafts SET inline_links_json=?, custom_emojis_json=? WHERE id=?",
+        (links_json, emojis_json, draft_id),
+    )
+    await db.commit()
 
 
 async def set_draft_include_original(draft_id: int, value: bool) -> None:

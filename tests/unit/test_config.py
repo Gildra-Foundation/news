@@ -22,6 +22,23 @@ def test_load_allows_bot_api_mode_without_telethon_credentials(monkeypatch) -> N
         "https://www.wowhead.com/news/rss/all",
         "https://wp-prod.icy-veins.com/custom-rss/?category=wow",
     )
+    assert cfg.emoji_autocreate_enabled is False
+    assert cfg.emoji_max_new_per_day == 10
+
+
+def test_loads_custom_emoji_limits(monkeypatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TARGET_CHANNEL", "channel")
+    monkeypatch.setenv("AI_PROVIDER", "app_server")
+    monkeypatch.setenv("EMOJI_AUTOCREATE_ENABLED", "true")
+    monkeypatch.setenv("EMOJI_MAX_NEW_PER_DAY", "7")
+    monkeypatch.setenv("EMOJI_UPLOAD_TIMEOUT_SECONDS", "12")
+
+    cfg = config.load()
+
+    assert cfg.emoji_autocreate_enabled is True
+    assert cfg.emoji_max_new_per_day == 7
+    assert cfg.emoji_upload_timeout_seconds == 12
 
 
 def test_load_enables_daily_reddit_topics_with_existing_api_key(monkeypatch) -> None:

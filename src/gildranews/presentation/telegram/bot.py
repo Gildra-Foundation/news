@@ -29,6 +29,7 @@ from gildranews.adapters.emoji import catalog as emoji_store
 from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.publishing import telegram as tg_writer
 from gildranews.application import digest as digest_mod
+from gildranews.application import warcraft_enrichment
 from gildranews.jobs.scheduler import ScheduledJobs
 from gildranews.presentation.telegram import drafts
 from gildranews.presentation.telegram.notifications import format_status, notify_admin
@@ -229,11 +230,22 @@ async def run_bot() -> None:
         override = emoji_store.detect_override(
             emap, f"{rewrite.title}\n{rewrite.body}",
         )
+        enrichment = warcraft_enrichment.WarcraftEnrichment()
+        if cfg.emoji_autocreate_enabled and rewrite.references:
+            try:
+                async with asyncio.timeout(cfg.emoji_upload_timeout_seconds):
+                    enrichment = await warcraft_enrichment.enrich(
+                        bot, cfg, rewrite.references,
+                    )
+            except Exception:
+                log.warning("Warcraft enrichment failed for /test", exc_info=True)
         text = tg_writer.format_post(
             rewrite.title, rewrite.body,
             emoji_theme=override or "",
             emoji_map=emap,
             hashtag_key=rewrite.hashtag,
+            inline_links=enrichment.inline_links,
+            custom_emojis=enrichment.emojis,
         )
         with tempfile.TemporaryDirectory(prefix="newsbot_test_") as tmpdir:
             media_files = await tg_reader.download_post_media(tele_client, post, tmpdir)
@@ -330,6 +342,16 @@ async def run_bot() -> None:
             )
             return
 
+        enrichment = warcraft_enrichment.WarcraftEnrichment()
+        if cfg.emoji_autocreate_enabled and rewrite.references:
+            try:
+                async with asyncio.timeout(cfg.emoji_upload_timeout_seconds):
+                    enrichment = await warcraft_enrichment.enrich(
+                        bot, cfg, rewrite.references,
+                    )
+            except Exception:
+                log.warning("Warcraft enrichment failed for manual link", exc_info=True)
+
         # Если в посте есть фото/видео — берём ИХ, без рендера скриншота
         if post.media_type in ("photo", "video") and post.media_url:
             draft_id = await db.create_draft(
@@ -340,6 +362,8 @@ async def run_bot() -> None:
                 original_text=post.text,
                 media_type=post.media_type,
                 hashtag=rewrite.hashtag,
+                inline_links=enrichment.inline_links,
+                custom_emojis=enrichment.emojis,
             )
         else:
             # Текстовый пост (X/Reddit) или GitHub-репо — рендерим карточку
@@ -351,6 +375,8 @@ async def run_bot() -> None:
                 original_text=post.text,
                 media_type="photo",
                 hashtag=rewrite.hashtag,
+                inline_links=enrichment.inline_links,
+                custom_emojis=enrichment.emojis,
             )
             screenshot_path: str | None = None
             try:
@@ -425,28 +451,41 @@ async def run_bot() -> None:
         media = drafts.photo_argument(draft["image_url"])
         media_type = draft.get("media_type") or "photo"
         target_msg_id: int | None = None
-        try:
+
+        async def _send_draft(formatted_text: str):
             if media:
                 if media_type == "video":
-                    sent = await bot.send_video(
-                        chat_id=cfg.target_channel, video=media, caption=text,
+                    return await bot.send_video(
+                        chat_id=cfg.target_channel, video=media, caption=formatted_text,
                     )
-                else:
-                    sent = await bot.send_photo(
-                        chat_id=cfg.target_channel, photo=media, caption=text,
-                    )
-                target_msg_id = sent.message_id
-            else:
-                sent = await bot.send_message(
-                    chat_id=cfg.target_channel,
-                    text=text,
-                    disable_web_page_preview=True,
+                return await bot.send_photo(
+                    chat_id=cfg.target_channel, photo=media, caption=formatted_text,
                 )
-                target_msg_id = sent.message_id
+            return await bot.send_message(
+                chat_id=cfg.target_channel,
+                text=formatted_text,
+                disable_web_page_preview=True,
+            )
+
+        try:
+            sent = await _send_draft(text)
+            target_msg_id = sent.message_id
         except TelegramAPIError as e:
-            log.exception("publish from draft failed")
-            await callback.answer(f"Ошибка: {e}", show_alert=True)
-            return
+            fallback_text = tg_writer.without_custom_emojis(text)
+            if fallback_text != text:
+                try:
+                    sent = await _send_draft(fallback_text)
+                    target_msg_id = sent.message_id
+                except TelegramAPIError as fallback_error:
+                    log.exception("publish from draft failed without Custom Emoji")
+                    await callback.answer(
+                        f"Ошибка: {fallback_error}", show_alert=True,
+                    )
+                    return
+            else:
+                log.exception("publish from draft failed")
+                await callback.answer(f"Ошибка: {e}", show_alert=True)
+                return
 
         # Зафиксировать в published_posts для дедупа и дайджеста
         await db.record_published(
@@ -600,6 +639,18 @@ async def run_bot() -> None:
             await message.answer("AI-сервис не справился. Попробуйте описать правку иначе.")
             return
         await db.update_draft(draft_id, rewrite.title, rewrite.body, rewrite.hashtag)
+        enrichment = warcraft_enrichment.WarcraftEnrichment()
+        if cfg.emoji_autocreate_enabled and rewrite.references:
+            try:
+                async with asyncio.timeout(cfg.emoji_upload_timeout_seconds):
+                    enrichment = await warcraft_enrichment.enrich(
+                        bot, cfg, rewrite.references,
+                    )
+            except Exception:
+                log.warning("Warcraft enrichment failed after draft edit", exc_info=True)
+        await db.set_draft_enrichment(
+            draft_id, enrichment.inline_links, enrichment.emojis,
+        )
         await drafts.send_preview(bot, message.chat.id, draft_id)
 
     @dp.message(Command("cancel"))

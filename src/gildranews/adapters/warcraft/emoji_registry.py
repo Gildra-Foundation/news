@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 from aiogram import Bot
@@ -78,6 +79,16 @@ class TelegramEmojiRegistry:
             except (TimeoutError, OSError, TelegramAPIError, EmojiUploadError) as exc:
                 log.warning("Custom emoji upload failed for %s: %s", entity.key, exc)
                 await sqlite.mark_emoji_asset_failed(icon.sha256, str(exc))
+                failed = await sqlite.emoji_asset_by_hash(icon.sha256)
+                if failed and failed["status"] == "disabled":
+                    try:
+                        await self.bot.send_message(
+                            self.owner_user_id,
+                            "⚠️ Автозагрузка игрового эмодзи отключена после пяти "
+                            f"ошибок: <code>{entity.key}</code>",
+                        )
+                    except TelegramAPIError:
+                        log.warning("Failed to notify the emoji registry owner", exc_info=True)
                 return None
             await sqlite.mark_emoji_asset_ready(
                 icon.sha256,
@@ -86,6 +97,29 @@ class TelegramEmojiRegistry:
                 sticker_set_name=asset.sticker_set_name,
             )
             return asset
+
+    async def retry_due(self, *, limit: int = 2) -> int:
+        if not self.enabled:
+            return 0
+        completed = 0
+        for row in await sqlite.due_emoji_uploads(limit=limit):
+            entity = ResolvedWarcraftEntity(
+                branch=row["branch"],
+                kind=row["kind"],
+                external_id=row["external_id"],
+                canonical_name=row["canonical_name"],
+                localized_name=row["localized_name"],
+                page_url=row["page_url"],
+                icon_url=row["icon_url"],
+            )
+            icon = NormalizedIcon(
+                path=Path(row["local_path"]),
+                sha256=row["sha256"],
+                source_url=row["source_url"],
+            )
+            if await self.get_or_create(entity, icon, fallback=row["fallback"]):
+                completed += 1
+        return completed
 
     async def _upload(
         self,

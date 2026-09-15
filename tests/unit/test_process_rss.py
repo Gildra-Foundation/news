@@ -6,12 +6,14 @@ import pytest
 
 from gildranews.adapters.sources.rss import RSSItem
 from gildranews.application import process_rss
+from gildranews.application.warcraft_enrichment import WarcraftEnrichment
 from gildranews.config import Config
 from gildranews.domain.models import (
     EntityReference,
     FilterResult,
     InfographicFact,
     InfographicSpec,
+    TelegramEmojiAsset,
 )
 
 
@@ -184,9 +186,12 @@ async def test_icy_veins_uses_article_raid_cover_instead_of_infographic(
         published["text"] = text
         return 88
 
-    async def resolve_reference(query, kind):
-        assert (query, kind) == ("Venomous Abyss", "raid")
-        return "https://www.wowhead.com/zone=16915"
+    async def enrich(bot, cfg, references):
+        assert references[0].query == "Venomous Abyss"
+        return WarcraftEnrichment(
+            inline_links=(("Ядовитой Бездне", "https://www.wowhead.com/zone=16915"),),
+            emojis=(TelegramEmojiAsset("123", "file", "set", "🏰"),),
+        )
 
     async def record_published(*args, **kwargs) -> None:
         return None
@@ -199,11 +204,7 @@ async def test_icy_veins_uses_article_raid_cover_instead_of_infographic(
     monkeypatch.setattr(process_rss.rss_source, "fetch_article_media", fetch_article_media)
     monkeypatch.setattr(process_rss.media_downloader, "download", download)
     monkeypatch.setattr(process_rss.tg_writer, "publish", publish)
-    monkeypatch.setattr(
-        process_rss.wowhead_references,
-        "resolve_reference",
-        resolve_reference,
-    )
+    monkeypatch.setattr(process_rss.warcraft_enrichment, "enrich", enrich)
 
     cfg = Config(
         tg_api_id=0,
@@ -216,6 +217,7 @@ async def test_icy_veins_uses_article_raid_cover_instead_of_infographic(
         lookback_minutes=120,
         interval_minutes=30,
         max_posts_per_run=3,
+        emoji_autocreate_enabled=True,
     )
     item = RSSItem(
         source="icy-veins",
@@ -239,6 +241,7 @@ async def test_icy_veins_uses_article_raid_cover_instead_of_infographic(
         '<a href="https://www.wowhead.com/zone=16915">Ядовитой Бездне</a>'
         in published["text"]
     )
+    assert published["text"].startswith('<tg-emoji emoji-id="123">🏰</tg-emoji>')
 
 
 @pytest.mark.asyncio
