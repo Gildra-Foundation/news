@@ -1,6 +1,7 @@
 from gildranews.application.translation_qa import (
     artificial_style_markers,
     normalize_wow_class_terms,
+    presentation_issues,
     untranslated_terms,
 )
 
@@ -57,4 +58,16 @@ def test_artificial_style_markers_detects_ai_editorial_cliches() -> None:
         "данный материал",
         "открывает новые возможности",
         "таким образом",
+    )
+
+
+def test_presentation_issues_detects_verbatim_title_and_dense_body() -> None:
+    title = "Blizzard ослабила урон босса"
+    body = title + ". " + ("Очень длинное предложение без полезной паузы " * 20)
+
+    assert presentation_issues(title, body) == (
+        "body_too_long",
+        "title_repeated_at_start",
+        "sentence_too_long",
+        "paragraph_too_dense",
     )

@@ -173,7 +173,7 @@ async def test_luna_news_analysis_uses_full_wow_context_and_hides_source() -> No
     assert "off-piece" in app_server.system.lower()
     assert "смена внешнего вида" in app_server.system.lower()
     assert "кратко, но полно" in app_server.system.lower()
-    assert "250–600 символов" in app_server.system.lower()
+    assert "220–550 символов" in app_server.system.lower()
     assert "не вырезай условие, дату, число или исключение" in app_server.system.lower()
     assert "простыми русскими конструкциями" in app_server.system.lower()
     assert "не пиши «level 20»" in app_server.system.lower()
@@ -183,6 +183,76 @@ async def test_luna_news_analysis_uses_full_wow_context_and_hides_source() -> No
     assert "не указывай источник" in app_server.system.lower()
     assert "mage → «маг»" in app_server.system.lower()
     assert "warlock → «чернокнижник»" in app_server.system.lower()
+    assert "recent_voice_examples" in app_server.system
+    assert "не пересказывай неизменившиеся факты" in app_server.system.lower()
+    assert "не повторяй заголовок" in app_server.system.lower()
+
+
+@pytest.mark.asyncio
+async def test_luna_builds_bounded_story_index_and_recent_voice_examples() -> None:
+    app_server = _StubAppServer(
+        {
+            "is_news": True,
+            "reason": "Новый факт",
+            "title": "Blizzard изменила награду события",
+            "body": "Игроки будут получать дополнительную монету раз в день.",
+            "hashtag": "новости",
+        },
+    )
+    processor = AppServerContentAI(app_server)
+    recent_posts = [
+        {
+            "title": f"Публикация {index}",
+            "body": (f"Факт {index}. " + "Подробность " * 100).strip(),
+            "posted_at": f"2026-09-15 0{index}:00:00",
+        }
+        for index in range(8)
+    ]
+
+    result = await processor.filter_and_rewrite(
+        "Blizzard changed the event reward to one extra coin per day.",
+        recent_posts,
+        [],
+    )
+
+    payload = json.loads(app_server.user)
+    assert result is not None
+    assert len(payload["recent_published"]) == 8
+    assert all(len(post["body"]) <= 420 for post in payload["recent_published"])
+    assert len(payload["recent_voice_examples"]) == 5
+    assert all(len(post["body"]) <= 700 for post in payload["recent_voice_examples"])
+
+
+@pytest.mark.asyncio
+async def test_luna_repairs_dense_presentation_before_publication() -> None:
+    long_body = "Blizzard изменила награду события. " + (
+        "Игроки будут получать дополнительную монету без дополнительных условий "
+        * 14
+    )
+    app_server = _SequenceAppServer(
+        [
+            {
+                "is_news": True,
+                "reason": "Новый факт",
+                "title": "Blizzard изменила награду события",
+                "body": long_body,
+                "hashtag": "новости",
+            },
+            {
+                "title": "Blizzard изменила награду события",
+                "body": "Теперь игроки будут получать дополнительную монету раз в день.",
+                "hashtag": "новости",
+            },
+        ],
+    )
+    processor = AppServerContentAI(app_server)
+
+    result = await processor.filter_and_rewrite(
+        "Blizzard changed the event reward to one extra coin per day.", [], [],
+    )
+
+    assert result is not None
+    assert result.body == "Теперь игроки будут получать дополнительную монету раз в день."
 
 
 @pytest.mark.asyncio

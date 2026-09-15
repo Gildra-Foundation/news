@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -15,6 +16,7 @@ from gildranews.application.translation_qa import (
     artificial_style_markers,
     check_translation,
     normalize_wow_class_terms,
+    presentation_issues,
     untranslated_terms,
 )
 from gildranews.domain.models import (
@@ -33,6 +35,11 @@ if TYPE_CHECKING:
     from gildranews.config import Config
 
 log = logging.getLogger(__name__)
+
+_STORY_CONTEXT_LIMIT = 50
+_STORY_BODY_LIMIT = 420
+_VOICE_CONTEXT_LIMIT = 5
+_VOICE_BODY_LIMIT = 700
 
 _JSON_SUFFIX = """
 
@@ -56,7 +63,10 @@ _RUSSIAN_REPAIR_PROMPT = """Ты — выпускающий редактор р�
 — имена существ и персонажей без точного перевода запиши кириллицей;
 — не оставляй латиницу, кроме Blizzard, WoW, World of Warcraft и официального названия WoW: Forever;
 — убери перечисленные artificial_style_markers и любые редакторские комментарии о самом материале;
+— исправь перечисленные presentation_issues: не повторяй заголовок в начале, раздели плотный текст и сократи body до 750 символов;
 — начни с события, действия или числа; пиши прямыми короткими фразами без канцелярита;
+— recent_published используй как индекс уже опубликованных сюжетов: оставь в центре только новый факт;
+— recent_voice_examples задают только длину и ритм канала; не копируй из них формулировки;
 — не используй «важно отметить», «таким образом», «данный материал», «открывает новые возможности» и итоговый вывод ради вывода;
 — сохрани без изменений все числа, версии, отрицания, статус события и причинно-следственные связи;
 — ничего не добавляй из памяти и не указывай источник.
@@ -112,6 +122,50 @@ class _DigestSection(BaseModel):
 class _DigestOutput(BaseModel):
     intro: str
     sections: list[_DigestSection]
+
+
+def _context_excerpt(value: str, limit: int, *, keep_paragraphs: bool) -> str:
+    cleaned = re.sub(r"[ \t]+", " ", str(value).strip())
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    if not keep_paragraphs:
+        cleaned = re.sub(r"\s+", " ", cleaned)
+    if len(cleaned) <= limit:
+        return cleaned
+    head = cleaned[: limit - 1].rstrip()
+    boundaries = [head.rfind(marker) for marker in (". ", "! ", "? ", "\n")]
+    boundary = max(boundaries)
+    if boundary >= limit // 2:
+        head = head[: boundary + 1]
+    elif " " in head:
+        head = head.rsplit(" ", 1)[0]
+    return head.rstrip() + "…"
+
+
+def _channel_context(
+    recent_posts: Sequence[PublishedPostContext],
+) -> tuple[list[PublishedPostContext], list[PublishedPostContext]]:
+    bounded = list(recent_posts[:_STORY_CONTEXT_LIMIT])
+    story_index = [
+        {
+            "title": _context_excerpt(post["title"], 180, keep_paragraphs=False),
+            "body": _context_excerpt(
+                post["body"], _STORY_BODY_LIMIT, keep_paragraphs=False,
+            ),
+            "posted_at": str(post["posted_at"]),
+        }
+        for post in bounded
+    ]
+    voice_examples = [
+        {
+            "title": _context_excerpt(post["title"], 180, keep_paragraphs=False),
+            "body": _context_excerpt(
+                post["body"], _VOICE_BODY_LIMIT, keep_paragraphs=True,
+            ),
+            "posted_at": str(post["posted_at"]),
+        }
+        for post in bounded[:_VOICE_CONTEXT_LIMIT]
+    ]
+    return story_index, voice_examples
 
 
 def _json_object(raw: str) -> dict[str, Any]:
@@ -219,11 +273,13 @@ class AppServerContentAI:
         emoji_themes: Sequence[dict[str, str]],
         content_kind: str = "news",
     ) -> FilterResult | None:
+        story_index, voice_examples = _channel_context(recent_posts)
         output = await self._complete(
             gemini._filter_prompt(content_kind) + _FILTER_JSON_SUFFIX,
             {
                 "post": text[:12_000],
-                "recent_published": list(recent_posts),
+                "recent_published": story_index,
+                "recent_voice_examples": voice_examples,
                 "available_emoji_themes": list(emoji_themes),
             },
             _FilterOutput,
@@ -238,7 +294,8 @@ class AppServerContentAI:
         public_text = f"{rewrite.title}\n{rewrite.body}"
         terms = untranslated_terms(public_text)
         style_markers = artificial_style_markers(public_text)
-        if terms or style_markers:
+        layout_issues = presentation_issues(rewrite.title, rewrite.body)
+        if terms or style_markers or layout_issues:
             repaired_output = await self._complete(
                 _RUSSIAN_REPAIR_PROMPT,
                 {
@@ -247,6 +304,9 @@ class AppServerContentAI:
                     "draft_body": rewrite.body,
                     "untranslated_terms": list(terms),
                     "artificial_style_markers": list(style_markers),
+                    "presentation_issues": list(layout_issues),
+                    "recent_published": story_index,
+                    "recent_voice_examples": voice_examples,
                 },
                 _RewriteOutput,
             )
@@ -264,6 +324,7 @@ class AppServerContentAI:
                 repaired is None
                 or untranslated_terms(repaired_text)
                 or artificial_style_markers(repaired_text)
+                or presentation_issues(repaired.title, repaired.body)
             ):
                 log.warning("Editorial repair did not pass language and style gates")
                 return None

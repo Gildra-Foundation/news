@@ -28,6 +28,7 @@ _ARTIFICIAL_STYLE_RE = re.compile(
     "|".join(re.escape(phrase) for phrase in _ARTIFICIAL_STYLE_PHRASES),
     re.IGNORECASE,
 )
+_SENTENCE_RE = re.compile(r"[^.!?]+(?:[.!?]+|$)")
 _MAGE_RE = re.compile(r"(?<![A-Za-z])mage(?![A-Za-z])", re.IGNORECASE)
 _WARLOCK_RE = re.compile(r"(?<![A-Za-z])warlock(?![A-Za-z])", re.IGNORECASE)
 _SORCERER_FORMS = {
@@ -89,6 +90,31 @@ def untranslated_terms(text: str) -> tuple[str, ...]:
 def artificial_style_markers(text: str) -> tuple[str, ...]:
     """Return high-confidence editorial clichés that make a post sound generated."""
     return tuple(match.group(0).casefold() for match in _ARTIFICIAL_STYLE_RE.finditer(text))
+
+
+def presentation_issues(title: str, body: str) -> tuple[str, ...]:
+    """Return high-confidence layout problems that warrant one repair pass."""
+    issues: list[str] = []
+    clean_title = re.sub(r"\W+", " ", title, flags=re.UNICODE).casefold().strip()
+    first_sentence = _SENTENCE_RE.match(body.strip())
+    clean_first = re.sub(
+        r"\W+", " ", first_sentence.group(0) if first_sentence else "",
+        flags=re.UNICODE,
+    ).casefold().strip()
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", body) if part.strip()]
+    sentences = [match.group(0).strip() for match in _SENTENCE_RE.finditer(body)]
+
+    if len(body) > 750:
+        issues.append("body_too_long")
+    if clean_title and clean_first.startswith(clean_title):
+        issues.append("title_repeated_at_start")
+    if any(len(sentence) > 260 for sentence in sentences):
+        issues.append("sentence_too_long")
+    if any(len(paragraph) > 500 for paragraph in paragraphs):
+        issues.append("paragraph_too_dense")
+    if len(paragraphs) > 3:
+        issues.append("too_many_paragraphs")
+    return tuple(issues)
 
 
 @dataclass(frozen=True, slots=True)
