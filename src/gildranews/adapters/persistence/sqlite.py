@@ -6,7 +6,11 @@ from collections.abc import Iterable
 
 import aiosqlite
 
-from gildranews.domain.models import PublishedPostContext
+from gildranews.domain.models import (
+    PublishedPostContext,
+    ResolvedWarcraftEntity,
+    TelegramEmojiAsset,
+)
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +45,41 @@ CREATE TABLE IF NOT EXISTS published_posts (
     posted_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_published_posted_at ON published_posts(posted_at);
+CREATE TABLE IF NOT EXISTS warcraft_entities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    branch TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    external_id INTEGER NOT NULL,
+    canonical_name TEXT NOT NULL,
+    localized_name TEXT NOT NULL,
+    page_url TEXT NOT NULL,
+    icon_url TEXT NOT NULL,
+    icon_sha256 TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(branch, kind, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_warcraft_entities_icon
+    ON warcraft_entities(icon_sha256);
+CREATE TABLE IF NOT EXISTS telegram_emoji_assets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sha256 TEXT NOT NULL UNIQUE,
+    source_url TEXT NOT NULL,
+    local_path TEXT NOT NULL,
+    fallback TEXT NOT NULL,
+    custom_emoji_id TEXT,
+    file_id TEXT,
+    sticker_set_name TEXT,
+    status TEXT NOT NULL DEFAULT 'queued',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    next_retry_at TEXT,
+    ready_at TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_telegram_emoji_status
+    ON telegram_emoji_assets(status, next_retry_at);
 CREATE TABLE IF NOT EXISTS drafts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_url TEXT,
@@ -301,6 +340,235 @@ async def recent_published_context(
         }
         for row in rows
     ]
+
+
+# ---------- Warcraft entities / Telegram custom emoji ----------
+async def upsert_warcraft_entity(
+    entity: ResolvedWarcraftEntity,
+    *,
+    icon_sha256: str | None,
+) -> None:
+    db = await _get_conn()
+    await db.execute(
+        """INSERT INTO warcraft_entities(
+               branch, kind, external_id, canonical_name, localized_name,
+               page_url, icon_url, icon_sha256
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(branch, kind, external_id) DO UPDATE SET
+               canonical_name=excluded.canonical_name,
+               localized_name=excluded.localized_name,
+               page_url=excluded.page_url,
+               icon_url=excluded.icon_url,
+               icon_sha256=COALESCE(excluded.icon_sha256, warcraft_entities.icon_sha256),
+               updated_at=CURRENT_TIMESTAMP""",
+        (
+            entity.branch,
+            entity.kind,
+            entity.external_id,
+            entity.canonical_name,
+            entity.localized_name,
+            entity.page_url,
+            entity.icon_url,
+            icon_sha256,
+        ),
+    )
+    await db.commit()
+
+
+async def upsert_emoji_asset(
+    *,
+    sha256: str,
+    source_url: str,
+    local_path: str,
+    fallback: str,
+) -> None:
+    db = await _get_conn()
+    await db.execute(
+        """INSERT INTO telegram_emoji_assets(
+               sha256, source_url, local_path, fallback
+           ) VALUES (?, ?, ?, ?)
+           ON CONFLICT(sha256) DO UPDATE SET
+               source_url=excluded.source_url,
+               local_path=excluded.local_path,
+               fallback=excluded.fallback,
+               updated_at=CURRENT_TIMESTAMP""",
+        (sha256, source_url, local_path, fallback),
+    )
+    await db.commit()
+
+
+async def emoji_asset_by_hash(sha256: str) -> dict | None:
+    db = await _get_conn()
+    async with db.execute(
+        """SELECT id, sha256, source_url, local_path, fallback,
+                  custom_emoji_id, file_id, sticker_set_name, status,
+                  attempts, last_error, next_retry_at
+           FROM telegram_emoji_assets WHERE sha256 = ?""",
+        (sha256,),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return None
+    keys = [
+        "id", "sha256", "source_url", "local_path", "fallback",
+        "custom_emoji_id", "file_id", "sticker_set_name", "status",
+        "attempts", "last_error", "next_retry_at",
+    ]
+    return dict(zip(keys, row, strict=True))
+
+
+async def claim_emoji_asset(sha256: str) -> bool:
+    db = await _get_conn()
+    cur = await db.execute(
+        """UPDATE telegram_emoji_assets
+           SET status='uploading', attempts=attempts + 1,
+               last_error=NULL, updated_at=CURRENT_TIMESTAMP
+           WHERE sha256 = ? AND attempts < 5 AND (
+               status = 'queued'
+               OR (status = 'failed' AND (
+                   next_retry_at IS NULL OR next_retry_at <= CURRENT_TIMESTAMP
+               ))
+               OR (status = 'uploading' AND updated_at < datetime('now', '-15 minutes'))
+           )""",
+        (sha256,),
+    )
+    await db.commit()
+    return cur.rowcount == 1
+
+
+async def mark_emoji_asset_ready(
+    sha256: str,
+    *,
+    custom_emoji_id: str,
+    file_id: str,
+    sticker_set_name: str,
+) -> None:
+    db = await _get_conn()
+    await db.execute(
+        """UPDATE telegram_emoji_assets
+           SET status='ready', custom_emoji_id=?, file_id=?, sticker_set_name=?,
+               ready_at=CURRENT_TIMESTAMP, next_retry_at=NULL,
+               last_error=NULL, updated_at=CURRENT_TIMESTAMP
+           WHERE sha256=?""",
+        (custom_emoji_id, file_id, sticker_set_name, sha256),
+    )
+    await db.commit()
+
+
+async def mark_emoji_asset_failed(sha256: str, error: str) -> None:
+    asset = await emoji_asset_by_hash(sha256)
+    attempts = int(asset["attempts"]) if asset else 1
+    delay = 5 if attempts <= 1 else 30 if attempts == 2 else 180
+    status = "disabled" if attempts >= 5 else "failed"
+    db = await _get_conn()
+    await db.execute(
+        """UPDATE telegram_emoji_assets
+           SET status=?, last_error=?, next_retry_at=datetime('now', ?),
+               updated_at=CURRENT_TIMESTAMP
+           WHERE sha256=?""",
+        (status, error[:500], f"+{delay} minutes", sha256),
+    )
+    await db.commit()
+
+
+async def ready_emoji_for_entity(
+    entity: ResolvedWarcraftEntity,
+) -> TelegramEmojiAsset | None:
+    db = await _get_conn()
+    async with db.execute(
+        """SELECT a.custom_emoji_id, a.file_id, a.sticker_set_name, a.fallback
+           FROM warcraft_entities e
+           JOIN telegram_emoji_assets a ON a.sha256 = e.icon_sha256
+           WHERE e.branch=? AND e.kind=? AND e.external_id=?
+             AND a.status='ready'
+           LIMIT 1""",
+        (entity.branch, entity.kind, entity.external_id),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return None
+    return TelegramEmojiAsset(
+        custom_emoji_id=row[0],
+        file_id=row[1],
+        sticker_set_name=row[2],
+        fallback=row[3],
+    )
+
+
+async def emoji_uploads_today() -> int:
+    db = await _get_conn()
+    async with db.execute(
+        """SELECT COUNT(*) FROM telegram_emoji_assets
+           WHERE ready_at >= date('now')"""
+    ) as cur:
+        row = await cur.fetchone()
+    return int(row[0]) if row else 0
+
+
+async def ready_emoji_count_in_set(sticker_set_name: str) -> int:
+    db = await _get_conn()
+    async with db.execute(
+        """SELECT COUNT(*) FROM telegram_emoji_assets
+           WHERE status='ready' AND sticker_set_name=?""",
+        (sticker_set_name,),
+    ) as cur:
+        row = await cur.fetchone()
+    return int(row[0]) if row else 0
+
+
+async def list_warcraft_entities() -> list[dict]:
+    db = await _get_conn()
+    async with db.execute(
+        """SELECT branch, kind, external_id, canonical_name, localized_name,
+                  page_url, icon_url, icon_sha256
+           FROM warcraft_entities ORDER BY id"""
+    ) as cur:
+        rows = await cur.fetchall()
+    keys = [
+        "branch", "kind", "external_id", "canonical_name", "localized_name",
+        "page_url", "icon_url", "icon_sha256",
+    ]
+    return [dict(zip(keys, row, strict=True)) for row in rows]
+
+
+async def list_emoji_assets(limit: int = 20) -> list[dict]:
+    db = await _get_conn()
+    async with db.execute(
+        """SELECT id, sha256, fallback, status, attempts, sticker_set_name,
+                  custom_emoji_id, last_error
+           FROM telegram_emoji_assets ORDER BY id DESC LIMIT ?""",
+        (max(1, min(limit, 100)),),
+    ) as cur:
+        rows = await cur.fetchall()
+    keys = [
+        "id", "sha256", "fallback", "status", "attempts", "sticker_set_name",
+        "custom_emoji_id", "last_error",
+    ]
+    return [dict(zip(keys, row, strict=True)) for row in rows]
+
+
+async def retry_emoji_asset(asset_id: int) -> bool:
+    db = await _get_conn()
+    cur = await db.execute(
+        """UPDATE telegram_emoji_assets
+           SET status='queued', attempts=0, next_retry_at=NULL,
+               last_error=NULL, updated_at=CURRENT_TIMESTAMP
+           WHERE id=?""",
+        (asset_id,),
+    )
+    await db.commit()
+    return cur.rowcount == 1
+
+
+async def disable_emoji_asset(asset_id: int) -> bool:
+    db = await _get_conn()
+    cur = await db.execute(
+        """UPDATE telegram_emoji_assets
+           SET status='disabled', updated_at=CURRENT_TIMESTAMP WHERE id=?""",
+        (asset_id,),
+    )
+    await db.commit()
+    return cur.rowcount == 1
 
 
 # ---------- Drafts ----------
