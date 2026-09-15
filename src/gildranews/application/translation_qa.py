@@ -11,6 +11,48 @@ _LATIN_WORD_RE = re.compile(r"[A-Za-z]+(?:['’][A-Za-z]+)?")
 _ALLOWED_LATIN_WORDS = frozenset(
     {"blizzard", "forever", "world", "of", "warcraft", "wow"}
 )
+_MAGE_RE = re.compile(r"(?<![A-Za-z])mage(?![A-Za-z])", re.IGNORECASE)
+_WARLOCK_RE = re.compile(r"(?<![A-Za-z])warlock(?![A-Za-z])", re.IGNORECASE)
+_SORCERER_FORMS = {
+    "колдун": ("маг", "чернокнижник"),
+    "колдуна": ("мага", "чернокнижника"),
+    "колдуну": ("магу", "чернокнижнику"),
+    "колдуном": ("магом", "чернокнижником"),
+    "колдуне": ("маге", "чернокнижнике"),
+    "колдуны": ("маги", "чернокнижники"),
+    "колдунов": ("магов", "чернокнижников"),
+    "колдунам": ("магам", "чернокнижникам"),
+    "колдунами": ("магами", "чернокнижниками"),
+    "колдунах": ("магах", "чернокнижниках"),
+}
+_SORCERER_RE = re.compile(
+    r"\b(" + "|".join(sorted(_SORCERER_FORMS, key=len, reverse=True)) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _preserve_case(source: str, replacement: str) -> str:
+    if source.isupper():
+        return replacement.upper()
+    if source[:1].isupper():
+        return replacement.capitalize()
+    return replacement
+
+
+def normalize_wow_class_terms(source: str, translated: str) -> str:
+    """Correct the common Mage/Warlock ambiguity using the English source."""
+    has_mage = bool(_MAGE_RE.search(source))
+    has_warlock = bool(_WARLOCK_RE.search(source))
+    if has_mage == has_warlock:
+        return translated
+    replacement_index = 0 if has_mage else 1
+
+    def replace(match: re.Match[str]) -> str:
+        original = match.group(0)
+        replacement = _SORCERER_FORMS[original.casefold()][replacement_index]
+        return _preserve_case(original, replacement)
+
+    return _SORCERER_RE.sub(replace, translated)
 
 
 def untranslated_terms(text: str) -> tuple[str, ...]:

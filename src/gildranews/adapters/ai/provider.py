@@ -9,8 +9,13 @@ from pydantic import BaseModel, Field, ValidationError
 
 from gildranews.adapters.ai import gemini
 from gildranews.adapters.ai.app_server import AppServerClient, AppServerError
+from gildranews.adapters.ai.prompts import WOW_CLASS_TERMINOLOGY
 from gildranews.adapters.editor.manacost import EditorClient
-from gildranews.application.translation_qa import check_translation, untranslated_terms
+from gildranews.application.translation_qa import (
+    check_translation,
+    normalize_wow_class_terms,
+    untranslated_terms,
+)
 from gildranews.domain.models import (
     EntityReference,
     FilterResult,
@@ -53,7 +58,7 @@ _RUSSIAN_REPAIR_PROMPT = """Ты — выпускающий редактор р�
 — ничего не добавляй из памяти и не указывай источник.
 
 Верни только JSON без Markdown: {"title":"...","body":"...","hashtag":"...","references":[{"label":"русское название из title/body","query":"точное английское имя из source_text","kind":"spell","branch":"retail","role":"primary"}]}.
-"""
+""" + WOW_CLASS_TERMINOLOGY
 
 
 class _FactOutput(BaseModel):
@@ -176,8 +181,8 @@ class AppServerContentAI:
         *,
         verify_translation: bool = False,
     ) -> Rewrite | None:
-        title = output.title.strip()
-        body = output.body.strip()
+        title = normalize_wow_class_terms(source, output.title.strip())
+        body = normalize_wow_class_terms(source, output.body.strip())
         if not title or not body:
             return None
         before_editor = f"{title}\n\n{body}"
@@ -192,6 +197,7 @@ class AppServerContentAI:
             return None
         if self._editor is not None:
             edited_body = await self._editor.edit(body)
+            edited_body = normalize_wow_class_terms(source, edited_body)
             if check_translation(before_editor, f"{title}\n\n{edited_body}").ready_for_editor:
                 body = edited_body
         return Rewrite(

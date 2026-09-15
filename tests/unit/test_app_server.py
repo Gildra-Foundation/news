@@ -181,6 +181,31 @@ async def test_luna_news_analysis_uses_full_wow_context_and_hides_source() -> No
     assert "World of Warcraft" in app_server.system
     assert "карта фактов" in app_server.system.lower()
     assert "не указывай источник" in app_server.system.lower()
+    assert "mage → «маг»" in app_server.system.lower()
+    assert "warlock → «чернокнижник»" in app_server.system.lower()
+
+
+@pytest.mark.asyncio
+async def test_luna_normalizes_mage_mistranslation_before_publication() -> None:
+    processor = AppServerContentAI(
+        _StubAppServer(
+            {
+                "is_news": True,
+                "reason": "Новая вступительная сцена",
+                "title": "У паладина и колдуна общая сцена",
+                "body": "Нежить-паладин и нежить-колдун получают одно вступление.",
+                "hashtag": "новости",
+            },
+        ),
+    )
+
+    result = await processor.filter_and_rewrite(
+        "The Undead Paladin and Undead Mage share the same intro scene.", [], [],
+    )
+
+    assert result is not None
+    assert result.title == "У паладина и мага общая сцена"
+    assert result.body == "Нежить-паладин и нежить-маг получают одно вступление."
 
 
 @pytest.mark.asyncio

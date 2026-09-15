@@ -12,6 +12,7 @@ from pydantic import BaseModel, ValidationError
 
 from gildranews.adapters.ai.prompts import (
     REDDIT_TOPIC_ANALYSIS_PROMPT,
+    WOW_CLASS_TERMINOLOGY,
     WOW_NEWS_ANALYSIS_PROMPT,
     X_TOPIC_ANALYSIS_PROMPT,
 )
@@ -97,7 +98,7 @@ BODY — 2–4 абзаца, между абзацами одна пустая �
 — До 1 уместного смыслового эмодзи на пост.
 
 ССЫЛКИ: если в исходнике есть URL — сохрани в body полным адресом. Не пиши «забрать», «по ссылке» — давай URL прямо.
-""" + HASHTAG_INSTRUCTION
+""" + HASHTAG_INSTRUCTION + WOW_CLASS_TERMINOLOGY
 
 FILTER_PROMPT = WOW_NEWS_ANALYSIS_PROMPT + HASHTAG_INSTRUCTION
 REDDIT_TOPIC_PROMPT = REDDIT_TOPIC_ANALYSIS_PROMPT + HASHTAG_INSTRUCTION
@@ -270,7 +271,7 @@ BODY — до 4 абзацев, между абзацами одна пуста�
 5. ЭМОДЗИ — до 1 смыслового на пост (🤖 🧠 ⚡️ 📦 🔧).
 
 6. ССЫЛКИ. Если в source_text есть URL — сохрани в body полным адресом.
-""" + HASHTAG_INSTRUCTION
+""" + HASHTAG_INSTRUCTION + WOW_CLASS_TERMINOLOGY
 
 
 class _TranslateOutput(BaseModel):
