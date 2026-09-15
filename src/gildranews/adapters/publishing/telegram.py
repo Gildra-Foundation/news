@@ -275,13 +275,7 @@ def format_post(
         if asset.custom_emoji_id.isdigit() and asset.fallback
     ][:2]
     theme_prefix = ""
-    if safe_custom_emojis:
-        asset = safe_custom_emojis[0]
-        theme_prefix = (
-            f'<tg-emoji emoji-id="{asset.custom_emoji_id}">'
-            f"{html_escape(asset.fallback)}</tg-emoji> "
-        )
-    elif emoji_theme and emoji_map:
+    if not safe_custom_emojis and emoji_theme and emoji_map:
         info = emoji_map.get(emoji_theme)
         if info and info.get("id") and info.get("fallback"):
             fb = html_escape(info["fallback"])
@@ -295,14 +289,25 @@ def format_post(
     title_html, safe_links = _linkify(title, safe_links)
     body_html, _unused_links = _linkify(body, safe_links)
 
+    labeled_emojis = [asset for asset in safe_custom_emojis if asset.placement_label]
+    if labeled_emojis:
+        for asset in labeled_emojis:
+            token = _custom_emoji_html(asset) + " "
+            title_html, placed = _insert_before_visible_label(
+                title_html, asset.placement_label, token,
+            )
+            if not placed:
+                body_html, _placed = _insert_before_visible_label(
+                    body_html, asset.placement_label, token,
+                )
+    elif safe_custom_emojis:
+        # Backwards compatibility for drafts created before placement labels existed.
+        theme_prefix = _custom_emoji_html(safe_custom_emojis[0]) + " "
+        if len(safe_custom_emojis) > 1:
+            body_html = _custom_emoji_html(safe_custom_emojis[1]) + " " + body_html
+
     blocks: list[str] = []
     blocks.append(f"{theme_prefix}<b>{title_html}</b>")
-    if len(safe_custom_emojis) > 1:
-        asset = safe_custom_emojis[1]
-        body_html = (
-            f'<tg-emoji emoji-id="{asset.custom_emoji_id}">'
-            f"{html_escape(asset.fallback)}</tg-emoji> {body_html}"
-        )
     blocks.append(body_html)
 
     if tail_url:
@@ -320,6 +325,36 @@ def format_post(
     blocks.append(tag)
 
     return "\n\n".join(blocks)
+
+
+def _custom_emoji_html(asset: TelegramEmojiAsset) -> str:
+    return (
+        f'<tg-emoji emoji-id="{asset.custom_emoji_id}">'
+        f"{html_escape(asset.fallback)}</tg-emoji>"
+    )
+
+
+def _insert_before_visible_label(
+    rendered: str,
+    label: str,
+    prefix: str,
+) -> tuple[str, bool]:
+    needle = html_escape(label.strip())
+    if not needle:
+        return rendered, False
+    folded = rendered.casefold()
+    folded_needle = needle.casefold()
+    cursor = 0
+    while (position := folded.find(folded_needle, cursor)) >= 0:
+        last_open = rendered.rfind("<", 0, position)
+        last_close = rendered.rfind(">", 0, position)
+        if last_open <= last_close:
+            anchor_open = rendered.rfind("<a ", 0, position)
+            anchor_close = rendered.rfind("</a>", 0, position)
+            insertion = anchor_open if anchor_open > anchor_close else position
+            return rendered[:insertion] + prefix + rendered[insertion:], True
+        cursor = position + len(needle)
+    return rendered, False
 
 
 def _smart_truncate(body: str, limit: int) -> str:

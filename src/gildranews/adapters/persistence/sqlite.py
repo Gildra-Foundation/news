@@ -660,6 +660,7 @@ async def create_draft(
                 "file_id": asset.file_id,
                 "sticker_set_name": asset.sticker_set_name,
                 "fallback": asset.fallback,
+                "placement_label": asset.placement_label,
             }
             for asset in custom_emojis[:2]
         ],
@@ -723,6 +724,7 @@ async def set_draft_enrichment(
                 "file_id": asset.file_id,
                 "sticker_set_name": asset.sticker_set_name,
                 "fallback": asset.fallback,
+                "placement_label": asset.placement_label,
             }
             for asset in custom_emojis[:2]
         ],

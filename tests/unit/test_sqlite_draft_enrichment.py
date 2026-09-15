@@ -12,7 +12,9 @@ async def test_draft_round_trips_warcraft_enrichment(monkeypatch, tmp_path) -> N
     monkeypatch.setattr(sqlite, "DB_PATH", str(tmp_path / "newsbot.db"))
     await sqlite.init()
     try:
-        asset = TelegramEmojiAsset("123", "file", "set", "✨")
+        asset = TelegramEmojiAsset(
+            "123", "file", "set", "✨", placement_label="Огненный шар",
+        )
         draft_id = await sqlite.create_draft(
             "https://x.com/example/status/1",
             "Заголовок",

@@ -85,6 +85,68 @@ def test_post_formatter_uses_at_most_two_warcraft_custom_emojis() -> None:
     assert 'emoji-id="3"' not in result
 
 
+def test_post_formatter_places_entity_emoji_next_to_body_mention() -> None:
+    mage = TelegramEmojiAsset(
+        "123",
+        "file-123",
+        "set",
+        "⚔️",
+        placement_label="Маги",
+    )
+
+    result = tg_writer.format_post(
+        title="В обновлении откроют все типы брони",
+        body="Маги смогут использовать облик латных наплечников.",
+        custom_emojis=[mage],
+    )
+
+    assert result.startswith("<b>В обновлении откроют все типы брони</b>")
+    assert (
+        '<tg-emoji emoji-id="123">⚔️</tg-emoji> Маги смогут использовать'
+        in result
+    )
+
+
+def test_post_formatter_does_not_move_unmatched_entity_emoji_to_title() -> None:
+    mage = TelegramEmojiAsset(
+        "123",
+        "file-123",
+        "set",
+        "⚔️",
+        placement_label="Маги",
+    )
+
+    result = tg_writer.format_post(
+        title="Откроют все типы брони",
+        body="Ограничения снимут для всех персонажей.",
+        custom_emojis=[mage],
+    )
+
+    assert "<tg-emoji" not in result
+
+
+def test_post_formatter_places_emoji_outside_linked_entity_name() -> None:
+    spell = TelegramEmojiAsset(
+        "123",
+        "file-123",
+        "set",
+        "✨",
+        placement_label="Огненный шар",
+    )
+
+    result = tg_writer.format_post(
+        title="Огненный шар усилят",
+        body="Урон заклинания вырастет.",
+        inline_links=(("Огненный шар", "https://www.wowhead.com/spell=133"),),
+        custom_emojis=(spell,),
+    )
+
+    assert result.startswith(
+        '<b><tg-emoji emoji-id="123">✨</tg-emoji> '
+        '<a href="https://www.wowhead.com/spell=133">Огненный шар</a> усилят</b>'
+    )
+
+
 @pytest.mark.asyncio
 async def test_publish_retries_without_custom_emoji_when_telegram_rejects_it(
     monkeypatch,

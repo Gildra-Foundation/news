@@ -142,6 +142,7 @@ class TelegramEmojiAsset:
     file_id: str
     sticker_set_name: str
     fallback: str
+    placement_label: str = ""
 
     @property
     def html(self) -> str:

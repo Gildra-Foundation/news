@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import httpx
@@ -73,7 +73,8 @@ async def enrich(
                 continue
             if entity is None:
                 continue
-            links.append((reference.label, entity.page_url))
+            if reference.kind not in {"class", "specialization"}:
+                links.append((reference.label, entity.page_url))
             if len(emojis) >= 2 or not entity.icon_url:
                 continue
             try:
@@ -91,5 +92,5 @@ async def enrich(
                 log.warning("Warcraft icon enrichment failed for %s", entity.key, exc_info=True)
                 continue
             if asset is not None:
-                emojis.append(asset)
+                emojis.append(replace(asset, placement_label=reference.label.strip()))
     return WarcraftEnrichment(tuple(links), tuple(emojis))
