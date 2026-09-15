@@ -138,7 +138,8 @@ cp .env.example .env
 | Поле | Где взять |
 |---|---|
 | `TELEGRAM_READER_ENABLED` | `false` для RSS/web; `true` включает Telethon-reader |
-| `TG_API_ID`, `TG_API_HASH` | Нужны только при `TELEGRAM_READER_ENABLED=true` |
+| `MTPROTO_PUBLISHER_ENABLED` | `true` публикует через Premium-аккаунт; чужие каналы не читает |
+| `TG_API_ID`, `TG_API_HASH` | Нужны для любого включённого MTProto-режима |
 | `BOT_TOKEN` | [@BotFather](https://t.me/BotFather) → /newbot |
 | `TARGET_CHANNEL` | `@название_канала` — бот должен быть **админом** |
 | `ADMIN_USER_ID` | узнаете на шаге 4 |
@@ -157,18 +158,21 @@ gildranews-api-keys --enable-paid
 Команда сохраняет `.env` с правами `0600`. Без `--enable-paid` она только
 обновляет ключи; платные маршруты остаются выключенными.
 
-### 3. Авторизация Telethon (опционально)
+### 3. Авторизация MTProto (опционально)
 
-Для RSS и web-источников пропустите этот шаг: бот запускается через Bot API без
-пользовательской Telegram-сессии и без SMS-кода.
+Чтобы Premium Custom Emoji отображались в канале без Fragment-улучшения имени,
+включите `MTPROTO_PUBLISHER_ENABLED=true`. Эта сессия используется только для
+отправки готовых постов. Чтение Telegram-источников управляется отдельно через
+`TELEGRAM_READER_ENABLED` и по умолчанию выключено.
 
-Если позднее понадобится читать чужие Telegram-каналы, создайте сессию один раз:
+Создайте пользовательскую сессию один раз:
 
 ```bash
 docker compose run --rm newsbot python -m gildranews.init_session
 ```
 
-Введите номер и SMS-код. Сессия запишется в `data/userbot.session`.
+Введите номер и код из служебного чата Telegram в приложении. Telegram может не
+предлагать SMS. Сессия запишется в `data/userbot.session` и не должна покидать сервер.
 
 ### 4. Запуск
 
