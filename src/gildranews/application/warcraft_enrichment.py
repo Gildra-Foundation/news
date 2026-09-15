@@ -130,6 +130,12 @@ async def enrich(
             except (IconError, OSError, httpx.HTTPError):
                 log.warning("Warcraft icon enrichment failed for %s", entity.key, exc_info=True)
                 continue
-            if asset is not None:
-                emojis.append(replace(asset, placement_label=reference.label.strip()))
+            if asset is None:
+                asset = TelegramEmojiAsset(
+                    custom_emoji_id="",
+                    file_id="",
+                    sticker_set_name="",
+                    fallback=pick_fallback(entity.kind),
+                )
+            emojis.append(replace(asset, placement_label=reference.label.strip()))
     return WarcraftEnrichment(tuple(links), tuple(emojis))

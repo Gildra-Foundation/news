@@ -211,7 +211,7 @@ async def test_publish_retries_without_custom_emoji_when_telegram_rejects_it(
 
     assert result == 91
     assert len(texts) == 2
-    assert texts[1] == "<h1>⚔️ Заголовок</h1>"
+    assert texts[1] == "<aside><b>⚔️ Заголовок</b></aside>"
     assert states == [("fragment_integration", "faulty")]
 
 

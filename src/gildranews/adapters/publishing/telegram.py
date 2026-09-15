@@ -279,12 +279,12 @@ def format_post(
     if len(body) > BODY_HARD_LIMIT:
         body = _smart_truncate(body, BODY_HARD_LIMIT)
 
-    safe_custom_emojis = [
+    display_emojis = [
         asset for asset in (custom_emojis or ())
-        if asset.custom_emoji_id.isdigit() and asset.fallback
+        if asset.fallback
     ][:2]
     theme_prefix = ""
-    if not safe_custom_emojis and emoji_theme and emoji_map:
+    if not display_emojis and emoji_theme and emoji_map:
         info = emoji_map.get(emoji_theme)
         if info and info.get("id") and info.get("fallback"):
             fb = html_escape(info["fallback"])
@@ -298,7 +298,7 @@ def format_post(
     title_html, safe_links = _linkify(title, safe_links)
     body_html, _unused_links = _linkify(body, safe_links)
 
-    labeled_emojis = [asset for asset in safe_custom_emojis if asset.placement_label]
+    labeled_emojis = [asset for asset in display_emojis if asset.placement_label]
     if labeled_emojis:
         for asset in labeled_emojis:
             token = _custom_emoji_html(asset) + " "
@@ -309,11 +309,11 @@ def format_post(
                 body_html, _placed = _insert_before_visible_label(
                     body_html, asset.placement_label, token,
                 )
-    elif safe_custom_emojis:
+    elif display_emojis:
         # Backwards compatibility for drafts created before placement labels existed.
-        theme_prefix = _custom_emoji_html(safe_custom_emojis[0]) + " "
-        if len(safe_custom_emojis) > 1:
-            body_html = _custom_emoji_html(safe_custom_emojis[1]) + " " + body_html
+        theme_prefix = _custom_emoji_html(display_emojis[0]) + " "
+        if len(display_emojis) > 1:
+            body_html = _custom_emoji_html(display_emojis[1]) + " " + body_html
 
     blocks: list[str] = []
     blocks.append(f"{theme_prefix}<b>{title_html}</b>")
@@ -346,6 +346,8 @@ def format_post(
 
 
 def _custom_emoji_html(asset: TelegramEmojiAsset) -> str:
+    if not asset.custom_emoji_id.isdigit():
+        return html_escape(asset.fallback)
     return (
         f'<tg-emoji emoji-id="{asset.custom_emoji_id}">'
         f"{html_escape(asset.fallback)}</tg-emoji>"

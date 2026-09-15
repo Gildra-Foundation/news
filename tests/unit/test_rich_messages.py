@@ -28,7 +28,8 @@ def test_build_rich_message_structures_article_media_table_and_footer() -> None:
     assert html.startswith('<img src="tg://photo?id=media_0"/>')
     assert '<video src="tg://video?id=media_1"/>' in html
     assert (
-        '<h1><tg-emoji emoji-id="123">⚔️</tg-emoji> Изменения рейда</h1>'
+        '<aside><b><tg-emoji emoji-id="123">⚔️</tg-emoji> '
+        'Изменения рейда</b></aside>'
         in html
     )
     assert "<p>Первый абзац.</p>" in html
@@ -82,3 +83,21 @@ async def test_publish_uses_rich_message_before_configured_mtproto(monkeypatch) 
 
     assert result == 501
     assert calls == ["rich"]
+
+
+def test_format_post_keeps_entity_fallback_when_custom_emoji_is_queued() -> None:
+    queued = tg_writer.TelegramEmojiAsset(
+        custom_emoji_id="",
+        file_id="",
+        sticker_set_name="",
+        fallback="🏆",
+        placement_label="Покоритель проклятий",
+    )
+
+    text = tg_writer.format_post(
+        "Проклятые всплески появляются чаще",
+        "Для достижения «Покоритель проклятий» потребуется 150 всплесков.",
+        custom_emojis=(queued,),
+    )
+
+    assert "🏆 Покоритель проклятий" in text

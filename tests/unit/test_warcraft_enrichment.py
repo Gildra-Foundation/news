@@ -137,6 +137,63 @@ async def test_enricher_keeps_class_emoji_but_does_not_link_class(
 
 
 @pytest.mark.asyncio
+async def test_enricher_keeps_unicode_fallback_while_custom_emoji_is_queued(
+    monkeypatch, tmp_path,
+) -> None:
+    async def resolve_entity(reference, http_client=None):
+        return ResolvedWarcraftEntity(
+            branch="retail",
+            kind="achievement",
+            external_id=63381,
+            canonical_name="Cursebreaker",
+            localized_name=reference.label,
+            page_url="https://www.wowhead.com/achievement=63381",
+            icon_url="https://wow.zamimg.com/cursebreaker.jpg",
+        )
+
+    async def normalize(url, destination_dir, http_client=None):
+        return type("Icon", (), {
+            "path": tmp_path / "icon.webp",
+            "sha256": "cursebreaker",
+            "source_url": url,
+        })()
+
+    class Registry:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def get_or_create(self, entity, icon, fallback):
+            return None
+
+    monkeypatch.setattr(warcraft_enrichment.wowhead, "resolve_entity", resolve_entity)
+    monkeypatch.setattr(warcraft_enrichment, "fetch_and_normalize_icon", normalize)
+    monkeypatch.setattr(warcraft_enrichment, "TelegramEmojiRegistry", Registry)
+
+    result = await warcraft_enrichment.enrich(
+        object(),
+        _cfg(tmp_path),
+        (
+            WarcraftEntityRef(
+                "Покоритель проклятий",
+                "Cursebreaker",
+                "achievement",
+                role="primary",
+            ),
+        ),
+    )
+
+    assert result.emojis == (
+        TelegramEmojiAsset(
+            custom_emoji_id="",
+            file_id="",
+            sticker_set_name="",
+            fallback="🏆",
+            placement_label="Покоритель проклятий",
+        ),
+    )
+
+
+@pytest.mark.asyncio
 async def test_enricher_places_curated_expansion_logo_before_official_name(
     monkeypatch, tmp_path,
 ) -> None:

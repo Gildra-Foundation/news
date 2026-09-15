@@ -89,7 +89,9 @@ def build_rich_message(
     title_match = re.fullmatch(r"(.*?)<b>(.*)</b>", title, flags=re.DOTALL)
     if title_match:
         title = f"{title_match.group(1)}{title_match.group(2)}"
-    html_blocks.append(f"<h1>{title}</h1>")
+    # Telegram's heading block has no alignment field. A pull quotation is the
+    # native centered-text block and keeps the article title visually distinct.
+    html_blocks.append(f"<aside><b>{title}</b></aside>")
 
     footer_parts: list[str] = []
     subscribe_button = ""
