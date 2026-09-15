@@ -366,3 +366,34 @@ async def test_luna_uses_x_editorial_policy_for_social_topics() -> None:
     assert result is not None
     assert "не выдавай один пост" in app_server.system.lower()
     assert "не указывай x" in app_server.system.lower()
+
+
+@pytest.mark.asyncio
+async def test_luna_repairs_ai_sounding_editorial_cliches_before_publication() -> None:
+    app_server = _SequenceAppServer(
+        [
+            {
+                "is_news": True,
+                "reason": "Изменение баланса",
+                "title": "Blizzard ослабила урон босса",
+                "body": (
+                    "Важно отметить, что урон способности снижен на 20%. "
+                    "Это открывает новые возможности для игроков."
+                ),
+                "hashtag": "новости",
+            },
+            {
+                "title": "Blizzard ослабила урон босса",
+                "body": "Урон способности снизили на 20%, поэтому бой станет проще.",
+                "hashtag": "новости",
+            },
+        ]
+    )
+    processor = AppServerContentAI(app_server)
+
+    result = await processor.filter_and_rewrite(
+        "Blizzard reduced the boss ability damage by 20%.", [], [],
+    )
+
+    assert result is not None
+    assert result.body == "Урон способности снизили на 20%, поэтому бой станет проще."

@@ -11,6 +11,23 @@ _LATIN_WORD_RE = re.compile(r"[A-Za-z]+(?:['’][A-Za-z]+)?")
 _ALLOWED_LATIN_WORDS = frozenset(
     {"blizzard", "forever", "world", "of", "warcraft", "wow"}
 )
+_ARTIFICIAL_STYLE_PHRASES = (
+    "важно отметить",
+    "стоит отметить",
+    "следует отметить",
+    "таким образом",
+    "в заключение",
+    "данный материал",
+    "материал отмечает",
+    "материал сообщает",
+    "открывает новые возможности",
+    "это подчёркивает",
+    "это подчеркивает",
+)
+_ARTIFICIAL_STYLE_RE = re.compile(
+    "|".join(re.escape(phrase) for phrase in _ARTIFICIAL_STYLE_PHRASES),
+    re.IGNORECASE,
+)
 _MAGE_RE = re.compile(r"(?<![A-Za-z])mage(?![A-Za-z])", re.IGNORECASE)
 _WARLOCK_RE = re.compile(r"(?<![A-Za-z])warlock(?![A-Za-z])", re.IGNORECASE)
 _SORCERER_FORMS = {
@@ -67,6 +84,11 @@ def untranslated_terms(text: str) -> tuple[str, ...]:
         seen.add(normalized)
         result.append(term)
     return tuple(result)
+
+
+def artificial_style_markers(text: str) -> tuple[str, ...]:
+    """Return high-confidence editorial clichés that make a post sound generated."""
+    return tuple(match.group(0).casefold() for match in _ARTIFICIAL_STYLE_RE.finditer(text))
 
 
 @dataclass(frozen=True, slots=True)

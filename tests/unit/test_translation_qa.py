@@ -1,4 +1,5 @@
 from gildranews.application.translation_qa import (
+    artificial_style_markers,
     normalize_wow_class_terms,
     untranslated_terms,
 )
@@ -43,3 +44,17 @@ def test_normalize_wow_class_terms_preserves_ambiguous_lore_wording() -> None:
     translated = "Маг встречает чернокнижника и безымянного колдуна."
 
     assert normalize_wow_class_terms(source, translated) == translated
+
+
+def test_artificial_style_markers_detects_ai_editorial_cliches() -> None:
+    text = (
+        "Важно отметить, что данный материал открывает новые возможности. "
+        "Таким образом, игроки получат больше вариантов."
+    )
+
+    assert artificial_style_markers(text) == (
+        "важно отметить",
+        "данный материал",
+        "открывает новые возможности",
+        "таким образом",
+    )

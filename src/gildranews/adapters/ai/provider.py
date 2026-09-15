@@ -12,6 +12,7 @@ from gildranews.adapters.ai.app_server import AppServerClient, AppServerError
 from gildranews.adapters.ai.prompts import WOW_CLASS_TERMINOLOGY
 from gildranews.adapters.editor.manacost import EditorClient
 from gildranews.application.translation_qa import (
+    artificial_style_markers,
     check_translation,
     normalize_wow_class_terms,
     untranslated_terms,
@@ -50,10 +51,13 @@ references — не более трёх объектов {"label":"русски�
 
 _RUSSIAN_REPAIR_PROMPT = """Ты — выпускающий редактор русскоязычного канала о World of Warcraft.
 
-Черновик уже основан на исходной статье. Исправь только язык title и body:
+Черновик уже основан на исходной статье. Исправь язык и подачу title и body:
 — переведи по смыслу названия рейдов, способностей, эффектов и механик;
 — имена существ и персонажей без точного перевода запиши кириллицей;
 — не оставляй латиницу, кроме Blizzard, WoW, World of Warcraft и официального названия WoW: Forever;
+— убери перечисленные artificial_style_markers и любые редакторские комментарии о самом материале;
+— начни с события, действия или числа; пиши прямыми короткими фразами без канцелярита;
+— не используй «важно отметить», «таким образом», «данный материал», «открывает новые возможности» и итоговый вывод ради вывода;
 — сохрани без изменений все числа, версии, отрицания, статус события и причинно-следственные связи;
 — ничего не добавляй из памяти и не указывай источник.
 
@@ -231,8 +235,10 @@ class AppServerContentAI:
         rewrite = await self._finish_rewrite(text, output)
         if rewrite is None:
             return None
-        terms = untranslated_terms(f"{rewrite.title}\n{rewrite.body}")
-        if terms:
+        public_text = f"{rewrite.title}\n{rewrite.body}"
+        terms = untranslated_terms(public_text)
+        style_markers = artificial_style_markers(public_text)
+        if terms or style_markers:
             repaired_output = await self._complete(
                 _RUSSIAN_REPAIR_PROMPT,
                 {
@@ -240,6 +246,7 @@ class AppServerContentAI:
                     "draft_title": rewrite.title,
                     "draft_body": rewrite.body,
                     "untranslated_terms": list(terms),
+                    "artificial_style_markers": list(style_markers),
                 },
                 _RewriteOutput,
             )
@@ -250,8 +257,15 @@ class AppServerContentAI:
                 repaired_output,
                 verify_translation=True,
             )
-            if repaired is None or untranslated_terms(f"{repaired.title}\n{repaired.body}"):
-                log.warning("Russian terminology repair did not remove Latin terms")
+            repaired_text = (
+                f"{repaired.title}\n{repaired.body}" if repaired is not None else ""
+            )
+            if (
+                repaired is None
+                or untranslated_terms(repaired_text)
+                or artificial_style_markers(repaired_text)
+            ):
+                log.warning("Editorial repair did not pass language and style gates")
                 return None
             rewrite = Rewrite(
                 title=repaired.title,
