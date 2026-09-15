@@ -18,7 +18,12 @@ from gildranews.domain.models import TelegramEmojiAsset, WarcraftEntityRef
 
 log = logging.getLogger(__name__)
 
+EXPANSION_EMOJI_IDS = {
+    "the last titan": "5280988738011309593",
+}
+
 _KIND_PRIORITY = {
+    "expansion": -1,
     "spell": 0,
     "talent": 1,
     "item": 2,
@@ -66,6 +71,19 @@ async def enrich(
         headers={"User-Agent": "GildraNews/0.1 Warcraft enrichment"},
     ) as client:
         for reference in ordered:
+            if reference.kind == "expansion":
+                emoji_id = EXPANSION_EMOJI_IDS.get(reference.query.casefold().strip(), "")
+                if emoji_id.isdigit() and len(emojis) < 2:
+                    emojis.append(
+                        TelegramEmojiAsset(
+                            custom_emoji_id=emoji_id,
+                            file_id="",
+                            sticker_set_name="gildra_warcraft_expansions",
+                            fallback="🎮",
+                            placement_label=reference.label.strip(),
+                        )
+                    )
+                continue
             try:
                 entity = await wowhead.resolve_entity(reference, http_client=client)
             except Exception:

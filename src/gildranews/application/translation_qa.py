@@ -11,6 +11,59 @@ _LATIN_WORD_RE = re.compile(r"[A-Za-z]+(?:['’][A-Za-z]+)?")
 _ALLOWED_LATIN_WORDS = frozenset(
     {"blizzard", "forever", "world", "of", "warcraft", "wow"}
 )
+WOW_EXPANSION_NAMES = (
+    "The Last Titan",
+    "The War Within",
+    "Battle for Azeroth",
+    "Warlords of Draenor",
+    "Mists of Pandaria",
+    "Wrath of the Lich King",
+    "The Burning Crusade",
+    "Dragonflight",
+    "Shadowlands",
+    "Midnight",
+    "Legion",
+    "Cataclysm",
+)
+_EXPANSION_TRANSLATIONS = {
+    "The Last Titan": (
+        "Последний Титан",
+        "Последнего Титана",
+        "Последнем Титане",
+    ),
+    "The War Within": (
+        "Война Внутри",
+        "Война внутри",
+        "Войны внутри",
+        "Войне внутри",
+    ),
+    "Battle for Azeroth": ("Битва за Азерот", "Битве за Азерот"),
+    "Warlords of Draenor": (
+        "Военачальники Дренора",
+        "Военачальниках Дренора",
+    ),
+    "Mists of Pandaria": ("Туманы Пандарии", "Туманах Пандарии"),
+    "Wrath of the Lich King": (
+        "Гнев Короля-лича",
+        "Гнев Короля Лича",
+        "Гневе Короля-лича",
+        "Гневе Короля Лича",
+    ),
+    "The Burning Crusade": (
+        "Пылающий крестовый поход",
+        "Пылающем крестовом походе",
+    ),
+    "Dragonflight": ("Драконий полёт", "Драконий полет"),
+    "Shadowlands": (
+        "Тёмные Земли",
+        "Темные Земли",
+        "Тёмных Землях",
+        "Темных Землях",
+    ),
+    "Midnight": ("Полночь", "Полуночи"),
+    "Legion": ("Легион", "Легионе"),
+    "Cataclysm": ("Катаклизм", "Катаклизме"),
+}
 _ARTIFICIAL_STYLE_PHRASES = (
     "важно отметить",
     "стоит отметить",
@@ -73,11 +126,32 @@ def normalize_wow_class_terms(source: str, translated: str) -> str:
     return _SORCERER_RE.sub(replace, translated)
 
 
+def normalize_wow_expansion_names(source: str, translated: str) -> str:
+    """Keep official English expansion names when they are present in the source."""
+    result = translated
+    for canonical, translated_forms in _EXPANSION_TRANSLATIONS.items():
+        if not re.search(re.escape(canonical), source, flags=re.IGNORECASE):
+            continue
+        for translated_form in translated_forms:
+            result = re.sub(
+                re.escape(translated_form),
+                canonical,
+                result,
+                flags=re.IGNORECASE,
+            )
+    return result
+
+
 def untranslated_terms(text: str) -> tuple[str, ...]:
     """Return Latin terms that should have been translated or transliterated."""
+    checked_text = _LINK_RE.sub("", _CODE_RE.sub("", text))
+    for expansion_name in WOW_EXPANSION_NAMES:
+        checked_text = re.sub(
+            re.escape(expansion_name), "", checked_text, flags=re.IGNORECASE,
+        )
     seen: set[str] = set()
     result: list[str] = []
-    for match in _LATIN_WORD_RE.finditer(_LINK_RE.sub("", _CODE_RE.sub("", text))):
+    for match in _LATIN_WORD_RE.finditer(checked_text):
         term = match.group(0)
         normalized = term.casefold()
         if normalized in _ALLOWED_LATIN_WORDS or normalized in seen:

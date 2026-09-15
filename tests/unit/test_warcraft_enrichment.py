@@ -134,3 +134,43 @@ async def test_enricher_keeps_class_emoji_but_does_not_link_class(
 
     assert result.inline_links == ()
     assert result.emojis[0].placement_label == "Маги"
+
+
+@pytest.mark.asyncio
+async def test_enricher_places_curated_expansion_logo_before_official_name(
+    monkeypatch, tmp_path,
+) -> None:
+    async def unexpected_resolver(*args, **kwargs):
+        raise AssertionError("expansion logos must not use ambiguous Wowhead search")
+
+    monkeypatch.setattr(warcraft_enrichment.wowhead, "resolve_entity", unexpected_resolver)
+    monkeypatch.setattr(
+        warcraft_enrichment,
+        "EXPANSION_EMOJI_IDS",
+        {"the last titan": "999"},
+        raising=False,
+    )
+
+    result = await warcraft_enrichment.enrich(
+        object(),
+        _cfg(tmp_path),
+        (
+            WarcraftEntityRef(
+                "The Last Titan",
+                "The Last Titan",
+                "expansion",
+                role="primary",
+            ),
+        ),
+    )
+
+    assert result.inline_links == ()
+    assert result.emojis == (
+        TelegramEmojiAsset(
+            "999",
+            "",
+            "gildra_warcraft_expansions",
+            "🎮",
+            placement_label="The Last Titan",
+        ),
+    )

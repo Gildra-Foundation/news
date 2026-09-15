@@ -326,6 +326,42 @@ async def test_luna_repairs_untranslated_raid_terms_before_publication() -> None
 
 
 @pytest.mark.asyncio
+async def test_luna_preserves_official_expansion_name_and_reference() -> None:
+    processor = AppServerContentAI(
+        _StubAppServer(
+            {
+                "is_news": True,
+                "reason": "Комментарий разработчиков",
+                "title": "Последний Титан не завершит все истории WoW",
+                "body": "Последний Титан завершит Сагу души мира, но не каждую историю.",
+                "hashtag": "новости",
+                "references": [
+                    {
+                        "label": "Последний Титан",
+                        "query": "The Last Titan",
+                        "kind": "expansion",
+                        "role": "primary",
+                    },
+                ],
+            },
+        ),
+    )
+
+    result = await processor.filter_and_rewrite(
+        "The Last Titan will conclude the Worldsoul Saga, but not every story in WoW.",
+        [],
+        [],
+    )
+
+    assert result is not None
+    assert result.title == "The Last Titan не завершит все истории WoW"
+    assert result.body == "The Last Titan завершит Сагу души мира, но не каждую историю."
+    assert [(ref.label, ref.query, ref.kind) for ref in result.references] == [
+        ("The Last Titan", "The Last Titan", "expansion"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_luna_drops_reference_query_not_present_in_source() -> None:
     processor = AppServerContentAI(
         _StubAppServer(

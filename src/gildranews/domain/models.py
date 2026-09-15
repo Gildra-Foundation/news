@@ -104,6 +104,7 @@ WarcraftEntityKind = Literal[
     "faction",
     "profession",
     "event",
+    "expansion",
 ]
 WarcraftEntityRole = Literal["primary", "secondary"]
 

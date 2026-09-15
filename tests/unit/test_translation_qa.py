@@ -1,6 +1,7 @@
 from gildranews.application.translation_qa import (
     artificial_style_markers,
     normalize_wow_class_terms,
+    normalize_wow_expansion_names,
     presentation_issues,
     untranslated_terms,
 )
@@ -27,6 +28,29 @@ def test_untranslated_terms_allows_common_russian_gaming_terms() -> None:
     text = "Новый контент патча усилил билд спека после нерфа."
 
     assert untranslated_terms(text) == ()
+
+
+def test_expansion_names_stay_official_and_are_not_reported_as_anglicisms() -> None:
+    source = "The Last Titan will conclude the Worldsoul Saga."
+    translated = "Последний Титан завершит Сагу души мира."
+
+    normalized = normalize_wow_expansion_names(source, translated)
+
+    assert normalized == "The Last Titan завершит Сагу души мира."
+    assert untranslated_terms(normalized) == ()
+
+
+def test_other_translated_expansion_names_are_restored_from_source() -> None:
+    source = "Midnight follows The War Within, after Dragonflight and Shadowlands."
+    translated = (
+        "Полночь выйдет после Войны внутри, а до них были Драконий полёт "
+        "и Тёмные Земли."
+    )
+
+    assert normalize_wow_expansion_names(source, translated) == (
+        "Midnight выйдет после The War Within, а до них были Dragonflight "
+        "и Shadowlands."
+    )
 
 
 def test_normalize_wow_class_terms_distinguishes_mage_from_warlock() -> None:

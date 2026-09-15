@@ -16,6 +16,7 @@ from gildranews.application.translation_qa import (
     artificial_style_markers,
     check_translation,
     normalize_wow_class_terms,
+    normalize_wow_expansion_names,
     presentation_issues,
     untranslated_terms,
 )
@@ -53,7 +54,7 @@ _FILTER_JSON_SUFFIX = """
 Верни только JSON без Markdown и пояснений:
 {"is_news":true,"reason":"...","title":"...","body":"...","emoji_theme":"...","hashtag":"...","infographic":null,"references":[]}
 infographic может быть объектом с полями kicker, title, facts (2–4 объектов value/label), source="". Каждое value должно дословно встречаться во входном post. Для отклонённой новости infographic=null. Не добавляй источник, URL или название издания в title/body.
-references — не более трёх объектов {"label":"русский текст из title/body","query":"точное исходное английское имя из post","kind":"class|specialization|spell|talent|item|cosmetic|transmog_set|mount|pet|achievement|raid|dungeon|boss|creature|faction|profession|event","branch":"retail|classic|forever","role":"primary|secondary"}. URL, ID и изображения не придумывай: их найдёт бот. Главную изменяемую сущность пометь primary, остальные secondary. Для остальных случаев references=[].
+references — не более трёх объектов {"label":"точный текст из title/body","query":"точное исходное английское имя из post","kind":"class|specialization|spell|talent|item|cosmetic|transmog_set|mount|pet|achievement|raid|dungeon|boss|creature|faction|profession|event|expansion","branch":"retail|classic|forever","role":"primary|secondary"}. Название дополнения сохраняй на английском и помечай kind=expansion. URL, ID и изображения не придумывай: их найдёт бот. Главную изменяемую сущность пометь primary, остальные secondary. Для остальных случаев references=[].
 """
 
 _RUSSIAN_REPAIR_PROMPT = """Ты — выпускающий редактор русскоязычного канала о World of Warcraft.
@@ -61,7 +62,8 @@ _RUSSIAN_REPAIR_PROMPT = """Ты — выпускающий редактор р�
 Черновик уже основан на исходной статье. Исправь язык и подачу title и body:
 — переведи по смыслу названия рейдов, способностей, эффектов и механик;
 — имена существ и персонажей без точного перевода запиши кириллицей;
-— не оставляй латиницу, кроме Blizzard, WoW, World of Warcraft и официального названия WoW: Forever;
+— официальные английские названия дополнений сохраняй без перевода и без склонения;
+— не оставляй другую латиницу, кроме Blizzard, WoW, World of Warcraft и официального названия WoW: Forever;
 — убери перечисленные artificial_style_markers и любые редакторские комментарии о самом материале;
 — исправь перечисленные presentation_issues: не повторяй заголовок в начале, раздели плотный текст и сократи body до 750 символов;
 — начни с события, действия или числа; пиши прямыми короткими фразами без канцелярита;
@@ -71,7 +73,7 @@ _RUSSIAN_REPAIR_PROMPT = """Ты — выпускающий редактор р�
 — сохрани без изменений все числа, версии, отрицания, статус события и причинно-следственные связи;
 — ничего не добавляй из памяти и не указывай источник.
 
-Верни только JSON без Markdown: {"title":"...","body":"...","hashtag":"...","references":[{"label":"русское название из title/body","query":"точное английское имя из source_text","kind":"spell","branch":"retail","role":"primary"}]}.
+Верни только JSON без Markdown: {"title":"...","body":"...","hashtag":"...","references":[{"label":"точное название из title/body","query":"точное английское имя из source_text","kind":"spell","branch":"retail","role":"primary"}]}.
 """ + WOW_CLASS_TERMINOLOGY
 
 
@@ -199,7 +201,7 @@ def _references(
     published_text = f"{title}\n{body}"
     references: list[EntityReference] = []
     for value in values:
-        label = value.label.strip()
+        label = normalize_wow_expansion_names(source, value.label.strip())
         query = value.query.strip()
         if not label or not query or label not in published_text or query.casefold() not in source_key:
             continue
@@ -239,8 +241,12 @@ class AppServerContentAI:
         *,
         verify_translation: bool = False,
     ) -> Rewrite | None:
-        title = normalize_wow_class_terms(source, output.title.strip())
-        body = normalize_wow_class_terms(source, output.body.strip())
+        title = normalize_wow_expansion_names(
+            source, normalize_wow_class_terms(source, output.title.strip()),
+        )
+        body = normalize_wow_expansion_names(
+            source, normalize_wow_class_terms(source, output.body.strip()),
+        )
         if not title or not body:
             return None
         before_editor = f"{title}\n\n{body}"
@@ -255,7 +261,9 @@ class AppServerContentAI:
             return None
         if self._editor is not None:
             edited_body = await self._editor.edit(body)
-            edited_body = normalize_wow_class_terms(source, edited_body)
+            edited_body = normalize_wow_expansion_names(
+                source, normalize_wow_class_terms(source, edited_body),
+            )
             if check_translation(before_editor, f"{title}\n\n{edited_body}").ready_for_editor:
                 body = edited_body
         return Rewrite(

@@ -21,6 +21,17 @@ def test_warcraft_reference_supports_branch_kind_and_priority_role() -> None:
     assert reference.role == "primary"
 
 
+def test_warcraft_reference_supports_expansion_kind() -> None:
+    reference = WarcraftEntityRef(
+        label="The Last Titan",
+        query="The Last Titan",
+        kind="expansion",
+        role="primary",
+    )
+
+    assert reference.kind == "expansion"
+
+
 def test_resolved_entity_and_telegram_asset_keep_stable_identity() -> None:
     entity = ResolvedWarcraftEntity(
         branch="retail",
