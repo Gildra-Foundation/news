@@ -577,8 +577,11 @@ async def publish(
     *,
     table_rows: Sequence[tuple[str, str]] | None = None,
 ) -> int | None:
-    """Publish a native article, with the proven legacy transport as fallback."""
+    """Choose a compact post or data-rich article, then publish safely."""
     import asyncio as _asyncio
+
+    if not should_publish_as_article(table_rows):
+        return await _publish_legacy(bot, target_channel, text, media_files)
 
     current_text = text
     rate_retried = False
@@ -661,3 +664,15 @@ async def publish(
             break
 
     return await _publish_legacy(bot, target_channel, text, media_files)
+
+
+def should_publish_as_article(
+    table_rows: Sequence[tuple[str, str]] | None,
+) -> bool:
+    """Use an article only when a table has enough data to aid comparison."""
+    meaningful_rows = [
+        (label, value)
+        for label, value in (table_rows or ())
+        if label.strip() and value.strip()
+    ]
+    return len(meaningful_rows) >= 3

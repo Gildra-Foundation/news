@@ -11,6 +11,12 @@ from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.publishing import telegram as tg_writer
 from gildranews.domain.models import TelegramEmojiAsset
 
+_RICH_TABLE_ROWS = (
+    ("Босс 1", "25%"),
+    ("Босс 2", "20%"),
+    ("Босс 3", "15%"),
+)
+
 
 def test_source_normalization_accepts_common_telegram_formats() -> None:
     assert db._normalize(" @Example_Channel ") == "example_channel"
@@ -207,11 +213,13 @@ async def test_publish_retries_without_custom_emoji_when_telegram_rejects_it(
         Bot(),
         "@channel",
         '<tg-emoji emoji-id="123">⚔️</tg-emoji> <b>Заголовок</b>',
+        table_rows=_RICH_TABLE_ROWS,
     )
 
     assert result == 91
     assert len(texts) == 2
-    assert texts[1] == "<aside><b>⚔️ Заголовок</b></aside>"
+    assert texts[1].startswith("<aside><b>⚔️ Заголовок</b></aside>")
+    assert "<tg-emoji" not in texts[1]
     assert states == [("fragment_integration", "faulty")]
 
 
@@ -248,6 +256,7 @@ async def test_publish_marks_fragment_healthy_when_rich_message_is_accepted(
             Bot(),
             "@channel",
             '<tg-emoji emoji-id="123">⚔️</tg-emoji> <b>Заголовок</b>',
+            table_rows=_RICH_TABLE_ROWS,
         )
     finally:
         tg_writer.configure_mtproto_publisher(None)
@@ -293,6 +302,7 @@ async def test_published_rich_message_survives_mtproto_restore_failure(
             Bot(),
             "@channel",
             '<tg-emoji emoji-id="123">⚔️</tg-emoji> <b>Заголовок</b>',
+            table_rows=_RICH_TABLE_ROWS,
         )
     finally:
         tg_writer.configure_mtproto_publisher(None)
@@ -338,6 +348,7 @@ async def test_publish_falls_back_to_configured_mtproto_transport(monkeypatch) -
             Bot(),
             "@channel",
             '<tg-emoji emoji-id="123">⚔️</tg-emoji> <b>Заголовок</b>',
+            table_rows=_RICH_TABLE_ROWS,
         )
     finally:
         tg_writer.configure_mtproto_publisher(None)
@@ -373,6 +384,7 @@ async def test_publish_bot_fallback_keeps_remote_media_url() -> None:
         "@channel",
         "<b>Заголовок</b>",
         [("https://cdn.example/raid.jpg", "photo")],
+        table_rows=_RICH_TABLE_ROWS,
     )
 
     assert result == 94

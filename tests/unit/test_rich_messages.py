@@ -77,12 +77,44 @@ async def test_publish_uses_rich_message_before_configured_mtproto(monkeypatch) 
             SimpleNamespace(),
             "@gildrawow",
             "<b>Заголовок</b>\n\nТекст",
+            table_rows=(
+                ("Босс", "20%"),
+                ("Второй босс", "15%"),
+                ("Третий босс", "10%"),
+            ),
         )
     finally:
         tg_writer.configure_mtproto_publisher(None)
 
     assert result == 501
     assert calls == ["rich"]
+
+
+@pytest.mark.asyncio
+async def test_publish_keeps_short_summary_as_regular_post(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def publish_rich_once(*_args, **_kwargs):
+        calls.append("rich")
+        return 501
+
+    async def publish_legacy(*_args, **_kwargs):
+        calls.append("legacy")
+        return 502
+
+    monkeypatch.setattr(tg_writer, "_publish_rich_once", publish_rich_once)
+    monkeypatch.setattr(tg_writer, "_publish_legacy", publish_legacy)
+
+    result = await tg_writer.publish(
+        SimpleNamespace(),
+        "@gildrawow",
+        "<b>Калькулятор WoW: Forever доступен</b>\n\n"
+        "Игроки могут заранее распределить очки наследия.",
+        table_rows=(("очков на старте", "16"), ("ноября — запуск", "4")),
+    )
+
+    assert result == 502
+    assert calls == ["legacy"]
 
 
 def test_format_post_keeps_entity_fallback_when_custom_emoji_is_queued() -> None:
