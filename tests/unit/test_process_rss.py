@@ -86,8 +86,16 @@ async def test_process_rss_item_publishes_without_source_attribution(monkeypatch
             },
         ]
 
-    async def publish(bot, target_channel: str, text: str, media_files=None) -> int:
+    async def publish(
+        bot,
+        target_channel: str,
+        text: str,
+        media_files=None,
+        *,
+        table_rows=None,
+    ) -> int:
         published.update(text=text, media_files=media_files, target_channel=target_channel)
+        assert table_rows is None
         return 77
 
     async def download(url, destination_dir, *, kind, allowed_hosts):
@@ -185,9 +193,17 @@ async def test_icy_veins_uses_article_raid_cover_instead_of_infographic(
         assert allowed_hosts == {"static.icy-veins.com"}
         return destination_dir / "raid.webp"
 
-    async def publish(bot, target_channel: str, text: str, media_files=None) -> int:
+    async def publish(
+        bot,
+        target_channel: str,
+        text: str,
+        media_files=None,
+        *,
+        table_rows=None,
+    ) -> int:
         published["media_files"] = media_files
         published["text"] = text
+        published["table_rows"] = table_rows
         return 88
 
     async def enrich(bot, cfg, references, *, publication_text=""):
@@ -248,6 +264,10 @@ async def test_icy_veins_uses_article_raid_cover_instead_of_infographic(
         in published["text"]
     )
     assert published["text"].startswith('<tg-emoji emoji-id="123">🏰</tg-emoji>')
+    assert published["table_rows"] == (
+        ("снижение", "25%"),
+        ("существ за волну", "8"),
+    )
 
 
 @pytest.mark.asyncio
@@ -277,8 +297,15 @@ async def test_scrape_do_finds_entity_image_before_infographic_fallback(
     async def enrich(*_args, **_kwargs):
         return WarcraftEnrichment()
 
-    async def publish(_bot, _target_channel, text, media_files=None) -> int:
-        published.update(text=text, media_files=media_files)
+    async def publish(
+        _bot,
+        _target_channel,
+        text,
+        media_files=None,
+        *,
+        table_rows=None,
+    ) -> int:
+        published.update(text=text, media_files=media_files, table_rows=table_rows)
         return 89
 
     async def record_published(*_args, **_kwargs) -> None:
@@ -324,6 +351,10 @@ async def test_scrape_do_finds_entity_image_before_infographic_fallback(
     assert result.status == "published"
     assert len(published["media_files"]) == 1
     assert published["media_files"][0][0].endswith("/searched-raid.webp")
+    assert published["table_rows"] == (
+        ("снижение", "25%"),
+        ("существ за волну", "8"),
+    )
 
 
 @pytest.mark.asyncio

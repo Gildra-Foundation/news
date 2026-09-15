@@ -4,7 +4,6 @@ from types import SimpleNamespace
 
 import pytest
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.methods import SendMessage
 
 from gildranews.adapters.ai import gemini as ai
 from gildranews.adapters.emoji import catalog as emoji_store
@@ -195,11 +194,11 @@ async def test_publish_retries_without_custom_emoji_when_telegram_rejects_it(
     monkeypatch.setattr(tg_writer.db, "set_service_state", set_state)
 
     class Bot:
-        async def send_message(self, **kwargs):
-            texts.append(kwargs["text"])
+        async def __call__(self, method):
+            texts.append(method.rich_message["html"])
             if len(texts) == 1:
                 raise TelegramBadRequest(
-                    method=SendMessage(chat_id="@channel", text=kwargs["text"]),
+                    method=method,
                     message="Bad Request: can't parse entities",
                 )
             return SimpleNamespace(message_id=91)
@@ -212,12 +211,12 @@ async def test_publish_retries_without_custom_emoji_when_telegram_rejects_it(
 
     assert result == 91
     assert len(texts) == 2
-    assert texts[1] == "⚔️ <b>Заголовок</b>"
+    assert texts[1] == "<h1>⚔️ Заголовок</h1>"
     assert states == [("fragment_integration", "faulty")]
 
 
 @pytest.mark.asyncio
-async def test_publish_marks_fragment_faulty_when_telegram_silently_removes_entity(
+async def test_publish_marks_fragment_healthy_when_rich_message_is_accepted(
     monkeypatch,
 ) -> None:
     states: list[tuple[str, str, str]] = []
@@ -226,8 +225,9 @@ async def test_publish_marks_fragment_faulty_when_telegram_silently_removes_enti
         states.append((key, value, detail))
 
     class Bot:
-        async def send_message(self, **kwargs):
-            return SimpleNamespace(message_id=92, entities=[], caption_entities=[])
+        async def __call__(self, method):
+            assert '<tg-emoji emoji-id="123">' in method.rich_message["html"]
+            return SimpleNamespace(message_id=92)
 
     monkeypatch.setattr(tg_writer.db, "set_service_state", set_state)
 
@@ -241,14 +241,14 @@ async def test_publish_marks_fragment_faulty_when_telegram_silently_removes_enti
     assert states == [
         (
             "fragment_integration",
-            "faulty",
-            "Telegram accepted the post but removed Custom Emoji",
+            "healthy",
+            "",
         )
     ]
 
 
 @pytest.mark.asyncio
-async def test_publish_prefers_configured_mtproto_transport(monkeypatch) -> None:
+async def test_publish_falls_back_to_configured_mtproto_transport(monkeypatch) -> None:
     calls: list[tuple[object, str, str, object]] = []
     states: list[tuple[str, str]] = []
     client = object()
@@ -261,8 +261,14 @@ async def test_publish_prefers_configured_mtproto_transport(monkeypatch) -> None
         states.append((key, value))
 
     class Bot:
+        async def __call__(self, method):
+            raise TelegramBadRequest(
+                method=method,
+                message="Bad Request: method is not available",
+            )
+
         async def send_message(self, **kwargs):
-            raise AssertionError("Bot API must not be used when MTProto succeeds")
+            raise AssertionError("Legacy Bot API must not be used when MTProto succeeds")
 
     monkeypatch.setattr(tg_writer.mtproto, "publish", publish_mtproto)
     monkeypatch.setattr(tg_writer.db, "set_service_state", set_state)
@@ -285,7 +291,10 @@ async def test_publish_prefers_configured_mtproto_transport(monkeypatch) -> None
             None,
         )
     ]
-    assert states == [("fragment_integration", "healthy")]
+    assert states == [
+        ("fragment_integration", "faulty"),
+        ("fragment_integration", "healthy"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -293,9 +302,11 @@ async def test_publish_bot_fallback_keeps_remote_media_url() -> None:
     received: list[object] = []
 
     class Bot:
-        async def send_photo(self, **kwargs):
-            received.append(kwargs["photo"])
-            return SimpleNamespace(message_id=94, entities=[], caption_entities=[])
+        async def __call__(self, method):
+            received.append(
+                method.rich_message["media"][0]["media"]["media"]
+            )
+            return SimpleNamespace(message_id=94)
 
     result = await tg_writer.publish(
         Bot(),

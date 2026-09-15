@@ -17,6 +17,12 @@ from telethon.errors import RPCError
 
 from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.publishing import mtproto
+from gildranews.adapters.publishing.rich_message import (
+    SUBSCRIBE_LABEL,
+    SUBSCRIBE_URL,
+    SendRichMessage,
+    build_rich_message,
+)
 from gildranews.domain.models import TelegramEmojiAsset
 
 log = logging.getLogger(__name__)
@@ -38,8 +44,6 @@ HASHTAGS = {
     "дайджест": "#дайджест@gildrawow",
 }
 DEFAULT_HASHTAG_KEY = "полезное"
-SUBSCRIBE_URL = "https://t.me/gildrawow"
-SUBSCRIBE_LABEL = "Подписаться на Gildra"
 SUBSCRIBE_FALLBACK = "🛡️"
 _WOWHEAD_ENTITY_PATH_RE = re.compile(
     r"^/(?:classic/)?(?:"
@@ -402,6 +406,25 @@ def without_custom_emojis(text: str) -> str:
     return _CUSTOM_EMOJI_RE.sub(r"\1", text)
 
 
+async def _publish_rich_once(
+    bot: Bot,
+    target_channel: str,
+    text: str,
+    media_files: list[tuple[str, str]] | None,
+    table_rows: Sequence[tuple[str, str]] | None = None,
+) -> int | None:
+    method = SendRichMessage(
+        chat_id=target_channel,
+        rich_message=build_rich_message(
+            text,
+            media_files,
+            table_rows=table_rows,
+        ),
+    )
+    message = await bot(method)
+    return message.message_id
+
+
 async def _publish_once(
     bot: Bot,
     target_channel: str,
@@ -457,7 +480,7 @@ def _media_input(path: str) -> str | FSInputFile:
     return FSInputFile(path)
 
 
-async def publish(
+async def _publish_legacy(
     bot: Bot,
     target_channel: str,
     text: str,
@@ -542,3 +565,72 @@ async def publish(
             log.exception("Не удалось опубликовать")
             return None
     return None
+
+
+async def publish(
+    bot: Bot,
+    target_channel: str,
+    text: str,
+    media_files: list[tuple[str, str]] | None = None,
+    *,
+    table_rows: Sequence[tuple[str, str]] | None = None,
+) -> int | None:
+    """Publish a native article, with the proven legacy transport as fallback."""
+    import asyncio as _asyncio
+
+    current_text = text
+    rate_retried = False
+    emoji_retried = False
+    for attempt in range(3):
+        try:
+            message_id = await _publish_rich_once(
+                bot,
+                target_channel,
+                current_text,
+                media_files,
+                table_rows,
+            )
+            if message_id is not None and _CUSTOM_EMOJI_RE.search(current_text):
+                try:
+                    await db.set_service_state("fragment_integration", "healthy", "")
+                except Exception:
+                    log.warning("Could not persist Rich Message health", exc_info=True)
+            if message_id is not None:
+                return message_id
+            break
+        except TelegramRetryAfter as error:
+            if rate_retried:
+                break
+            rate_retried = True
+            wait = min(int(error.retry_after) + 1, 60)
+            log.warning(
+                "Rich Message rate limit, attempt=%d, retry_after=%ds (wait=%ds)",
+                attempt,
+                error.retry_after,
+                wait,
+            )
+            await _asyncio.sleep(wait)
+        except TelegramAPIError as error:
+            if not emoji_retried and _CUSTOM_EMOJI_RE.search(current_text):
+                emoji_retried = True
+                current_text = without_custom_emojis(current_text)
+                try:
+                    await db.set_service_state(
+                        "fragment_integration",
+                        "faulty",
+                        "Telegram rejected Custom Emoji in a Rich Message",
+                    )
+                except Exception:
+                    log.warning("Could not persist Rich Message failure", exc_info=True)
+                log.warning(
+                    "Telegram rejected Rich Message Custom Emoji (%s); retrying with Unicode",
+                    type(error).__name__,
+                )
+                continue
+            log.warning(
+                "Telegram rejected Rich Message (%s); using legacy publication",
+                type(error).__name__,
+            )
+            break
+
+    return await _publish_legacy(bot, target_channel, text, media_files)

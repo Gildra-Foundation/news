@@ -217,7 +217,15 @@ async def process_item(
                 if rendered:
                     media.append((str(infographic_path), "photo"))
             target_message_id = await tg_writer.publish(
-                bot, cfg.target_channel, post_text, media,
+                bot,
+                cfg.target_channel,
+                post_text,
+                media,
+                table_rows=(
+                    analysis.infographic.table_rows
+                    if analysis.infographic is not None
+                    else None
+                ),
             )
     except Exception as exc:
         log.exception("RSS publish failed for %s/%s", item.source, item.external_id)

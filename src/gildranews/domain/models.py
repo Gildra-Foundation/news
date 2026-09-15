@@ -84,6 +84,10 @@ class InfographicSpec:
     kicker: str = "ГЛАВНОЕ В ЦИФРАХ"
     source: str = ""
 
+    @property
+    def table_rows(self) -> tuple[tuple[str, str], ...]:
+        return tuple((fact.label, fact.value) for fact in self.facts)
+
 
 WarcraftBranch = Literal["retail", "classic", "forever"]
 WarcraftEntityKind = Literal[

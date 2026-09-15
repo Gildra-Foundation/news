@@ -262,7 +262,17 @@ async def run_bot() -> None:
         )
         with tempfile.TemporaryDirectory(prefix="newsbot_test_") as tmpdir:
             media_files = await tg_reader.download_post_media(tele_client, post, tmpdir)
-            target_msg_id = await tg_writer.publish(bot, cfg.target_channel, text, media_files)
+            target_msg_id = await tg_writer.publish(
+                bot,
+                cfg.target_channel,
+                text,
+                media_files,
+                table_rows=(
+                    rewrite.infographic.table_rows
+                    if rewrite.infographic is not None
+                    else None
+                ),
+            )
         if target_msg_id:
             await db.mark_seen(post.channel, post.message_id)
             # Записываем в published_posts чтобы дайджест мог сослаться

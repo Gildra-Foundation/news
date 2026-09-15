@@ -175,7 +175,17 @@ async def process_post(
                 custom_emojis=custom_emojis,
                 subscribe_emoji_id=cfg.subscribe_emoji_id,
             )
-            target_msg_id = await tg_writer.publish(bot, cfg.target_channel, text, media)
+            target_msg_id = await tg_writer.publish(
+                bot,
+                cfg.target_channel,
+                text,
+                media,
+                table_rows=(
+                    filt.infographic.table_rows
+                    if filt.infographic is not None
+                    else None
+                ),
+            )
         if target_msg_id:
             log.info("Опубликовано: @%s/%s media=%d → %d", post.channel, post.message_id, len(media), target_msg_id)
             await db.record_published(
