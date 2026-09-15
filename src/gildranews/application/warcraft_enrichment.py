@@ -19,7 +19,7 @@ from gildranews.domain.models import TelegramEmojiAsset, WarcraftEntityRef
 log = logging.getLogger(__name__)
 
 EXPANSION_EMOJI_IDS = {
-    "the last titan": "5280988738011309593",
+    "the last titan": "5283041899882523483",
 }
 
 _KIND_PRIORITY = {
