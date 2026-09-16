@@ -373,10 +373,11 @@ async def test_scrape_do_finds_entity_image_before_infographic_fallback(
 
 
 @pytest.mark.asyncio
-async def test_process_rss_item_releases_claim_when_ai_is_temporarily_unavailable(
+async def test_process_rss_item_keeps_claim_for_durable_ai_retry(
     monkeypatch,
 ) -> None:
     released: list[tuple[str, int]] = []
+    queued: list[dict] = []
 
     async def claim_message(channel: str, message_id: int) -> bool:
         return True
@@ -387,9 +388,18 @@ async def test_process_rss_item_releases_claim_when_ai_is_temporarily_unavailabl
     async def release_claim(channel: str, message_id: int) -> None:
         released.append((channel, message_id))
 
+    async def enqueue_processing_retry(**kwargs) -> int:
+        queued.append(kwargs)
+        return 7
+
     monkeypatch.setattr(process_rss.db, "claim_message", claim_message)
     monkeypatch.setattr(process_rss.db, "recent_published_context", recent_context)
     monkeypatch.setattr(process_rss.db, "release_claim", release_claim)
+    monkeypatch.setattr(
+        process_rss.retry_store,
+        "enqueue",
+        enqueue_processing_retry,
+    )
     monkeypatch.setattr(process_rss.emoji_store, "load", dict)
     monkeypatch.setattr(process_rss.emoji_store, "themes_for_prompt", lambda _emap: [])
 
@@ -418,7 +428,197 @@ async def test_process_rss_item_releases_claim_when_ai_is_temporarily_unavailabl
     )
 
     assert result.status == "ai_error"
-    assert released == [("wowhead", 382863)]
+    assert released == []
+    assert queued[0]["source"] == "wowhead"
+    assert queued[0]["external_id"] == 382863
+    assert queued[0]["content_kind"] == "news"
+    assert queued[0]["expires_hours"] == 6
+
+
+@pytest.mark.asyncio
+async def test_process_item_keeps_claim_and_queues_when_context_loading_fails(
+    monkeypatch,
+) -> None:
+    released: list[tuple[str, int]] = []
+    queued: list[dict] = []
+
+    async def claim_message(_channel: str, _message_id: int) -> bool:
+        return True
+
+    async def recent_context(*_args, **_kwargs):
+        raise RuntimeError("database temporarily busy")
+
+    async def release_claim(channel: str, message_id: int) -> None:
+        released.append((channel, message_id))
+
+    async def enqueue_processing_retry(**kwargs) -> int:
+        queued.append(kwargs)
+        return 8
+
+    monkeypatch.setattr(process_rss.db, "claim_message", claim_message)
+    monkeypatch.setattr(process_rss.db, "recent_published_context", recent_context)
+    monkeypatch.setattr(process_rss.db, "release_claim", release_claim)
+    monkeypatch.setattr(
+        process_rss.retry_store,
+        "enqueue",
+        enqueue_processing_retry,
+    )
+
+    cfg = Config(
+        tg_api_id=0,
+        tg_api_hash="",
+        bot_token="token",
+        target_channel="@gildrawow",
+        admin_user_id=1,
+        gemini_api_key="",
+        gemini_model="model",
+        lookback_minutes=45,
+        interval_minutes=30,
+        max_posts_per_run=3,
+    )
+    item = RSSItem(
+        source="wowhead",
+        external_id=382864,
+        title="Important update",
+        content="Important article body.",
+        published_at=datetime.now(UTC),
+    )
+
+    result = await process_rss.process_item(
+        bot=object(),
+        cfg=cfg,
+        item=item,
+        content_ai=object(),
+    )
+
+    assert result.status == "error"
+    assert released == []
+    assert queued[0]["external_id"] == 382864
+
+
+@pytest.mark.asyncio
+async def test_process_item_releases_claim_if_retry_cannot_be_persisted(
+    monkeypatch,
+) -> None:
+    released: list[tuple[str, int]] = []
+
+    async def claim_message(_channel: str, _message_id: int) -> bool:
+        return True
+
+    async def recent_context(*_args, **_kwargs):
+        raise RuntimeError("context unavailable")
+
+    async def enqueue_processing_retry(**_kwargs) -> int:
+        raise RuntimeError("database full")
+
+    async def release_claim(channel: str, message_id: int) -> None:
+        released.append((channel, message_id))
+
+    monkeypatch.setattr(process_rss.db, "claim_message", claim_message)
+    monkeypatch.setattr(process_rss.db, "recent_published_context", recent_context)
+    monkeypatch.setattr(
+        process_rss.retry_store,
+        "enqueue",
+        enqueue_processing_retry,
+    )
+    monkeypatch.setattr(process_rss.db, "release_claim", release_claim)
+
+    cfg = Config(
+        tg_api_id=0,
+        tg_api_hash="",
+        bot_token="token",
+        target_channel="@gildrawow",
+        admin_user_id=1,
+        gemini_api_key="",
+        gemini_model="model",
+        lookback_minutes=45,
+        interval_minutes=30,
+        max_posts_per_run=3,
+    )
+    item = RSSItem(
+        source="wowhead",
+        external_id=382866,
+        title="Important update",
+        content="Important article body.",
+        published_at=datetime.now(UTC),
+    )
+
+    result = await process_rss.process_item(
+        bot=object(), cfg=cfg, item=item, content_ai=object(),
+    )
+
+    assert result.status == "error"
+    assert released == [("wowhead", 382866)]
+
+
+@pytest.mark.asyncio
+async def test_retry_due_items_replays_persisted_payload(monkeypatch) -> None:
+    now = datetime(2026, 9, 16, 12, 0, tzinfo=UTC)
+    processed: list[dict] = []
+    notices: list[process_rss.ProcessResult] = []
+    deleted: list[int] = []
+
+    async def due_processing_retries(*, limit, now):
+        assert limit == 3
+        return [
+            {
+                "id": 17,
+                "source": "wowhead",
+                "external_id": 382865,
+                "payload_json": (
+                    '{"source":"wowhead","external_id":382865,'
+                    '"title":"Saved news","content":"Saved body",'
+                    '"published_at":"2026-09-16T08:00:00+00:00",'
+                    '"article_url":"https://www.wowhead.com/news=382865",'
+                    '"image_url":"","video_url":""}'
+                ),
+                "content_kind": "news",
+                "quota_source": None,
+                "quota_day": None,
+                "quota_limit": None,
+                "attempts": 1,
+            },
+        ]
+
+    async def process_item(**kwargs):
+        processed.append(kwargs)
+        return process_rss.ProcessResult(
+            "published",
+            kwargs["item"].source,
+            kwargs["item"].external_id,
+        )
+
+    async def on_result(result):
+        notices.append(result)
+
+    async def delete_processing_retry(retry_id: int) -> None:
+        deleted.append(retry_id)
+
+    monkeypatch.setattr(
+        process_rss.retry_store,
+        "due",
+        due_processing_retries,
+    )
+    monkeypatch.setattr(process_rss, "process_item", process_item)
+    monkeypatch.setattr(
+        process_rss.retry_store,
+        "delete",
+        delete_processing_retry,
+    )
+
+    result = await process_rss.retry_due_items(
+        bot=object(),
+        cfg=object(),
+        content_ai=object(),
+        on_result=on_result,
+        now=now,
+    )
+
+    assert result == {"due": 1, "processed": 1, "published": 1, "failed": 0}
+    assert processed[0]["retry_id"] == 17
+    assert processed[0]["item"].external_id == 382865
+    assert notices[0].status == "published"
+    assert deleted == [17]
 
 
 @pytest.mark.asyncio
@@ -480,3 +680,58 @@ async def test_run_once_processes_only_items_inside_lookback(monkeypatch) -> Non
     assert processed == [2]
     assert result == {"fetched": 1, "selected": 1, "published": 1, "error": None}
     assert runs == [(1, 1, 1, None)]
+
+
+@pytest.mark.asyncio
+async def test_run_once_records_processing_failure_in_run_history(monkeypatch) -> None:
+    now = datetime(2026, 9, 16, 16, 0, tzinfo=UTC)
+    item = RSSItem(
+        source="wowhead",
+        external_id=382867,
+        title="Recent",
+        content="Recent article body",
+        published_at=now - timedelta(minutes=10),
+    )
+    runs: list[tuple[int, int, int, str | None]] = []
+
+    async def fetch_feed(_url: str, *, source: str):
+        assert source == "wowhead"
+        return [item]
+
+    async def process_item(**_kwargs):
+        return process_rss.ProcessResult(
+            "ai_error",
+            "wowhead",
+            382867,
+            reason="InvalidAIResponseError: malformed JSON",
+        )
+
+    async def record_run(fetched, selected, published, error) -> None:
+        runs.append((fetched, selected, published, error))
+
+    monkeypatch.setattr(process_rss.rss_source, "fetch_feed", fetch_feed)
+    monkeypatch.setattr(process_rss, "process_item", process_item)
+    monkeypatch.setattr(process_rss.db, "record_run", record_run)
+
+    cfg = Config(
+        tg_api_id=0,
+        tg_api_hash="",
+        bot_token="token",
+        target_channel="@gildrawow",
+        admin_user_id=1,
+        gemini_api_key="",
+        gemini_model="model",
+        lookback_minutes=45,
+        interval_minutes=30,
+        max_posts_per_run=3,
+        rss_feed_urls=("https://www.wowhead.com/news/rss/all",),
+    )
+
+    result = await process_rss.run_once(
+        bot=object(), cfg=cfg, content_ai=object(), now=now,
+    )
+
+    assert result["error"] == (
+        "wowhead/382867: InvalidAIResponseError: malformed JSON"
+    )
+    assert runs == [(1, 0, 0, result["error"])]

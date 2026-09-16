@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import tempfile
 from collections.abc import Awaitable, Callable
@@ -12,6 +13,7 @@ from aiogram import Bot
 from gildranews.adapters import media as media_downloader
 from gildranews.adapters.emoji import catalog as emoji_store
 from gildranews.adapters.media import scrape_do_images
+from gildranews.adapters.persistence import processing_retries as retry_store
 from gildranews.adapters.persistence import publication_guard
 from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.publishing import telegram as tg_writer
@@ -30,6 +32,99 @@ RSS_MEDIA_HOSTS = {
     "icy-veins": {"static.icy-veins.com"},
 }
 ResultCallback = Callable[[ProcessResult], Awaitable[None]]
+RETRY_LIMIT_PER_RUN = 3
+RETRY_TTL_HOURS = {"news": 6, "reddit_topic": 24, "x_topic": 24}
+
+
+def _retry_payload(item: rss_source.RSSItem) -> str:
+    return json.dumps(
+        {
+            "source": item.source,
+            "external_id": item.external_id,
+            "title": item.title,
+            "content": item.content,
+            "published_at": item.published_at.isoformat(),
+            "article_url": item.article_url,
+            "image_url": item.image_url,
+            "video_url": item.video_url,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _retry_item(payload_json: str) -> rss_source.RSSItem:
+    value = json.loads(payload_json)
+    if not isinstance(value, dict):
+        raise TypeError("Retry payload must be a JSON object")
+    published_at = datetime.fromisoformat(str(value["published_at"]))
+    if published_at.tzinfo is None:
+        published_at = published_at.replace(tzinfo=UTC)
+    return rss_source.RSSItem(
+        source=str(value["source"]),
+        external_id=int(value["external_id"]),
+        title=str(value["title"]),
+        content=str(value["content"]),
+        published_at=published_at.astimezone(UTC),
+        article_url=str(value.get("article_url") or ""),
+        image_url=str(value.get("image_url") or ""),
+        video_url=str(value.get("video_url") or ""),
+    )
+
+
+async def _defer_processing(
+    item: rss_source.RSSItem,
+    *,
+    content_kind: str,
+    quota_source: str | None,
+    quota_day: date | None,
+    quota_limit: int | None,
+    retry_id: int | None,
+    error: Exception | str,
+) -> None:
+    safe_error = f"{type(error).__name__}: {error}" if isinstance(error, Exception) else error
+    try:
+        if retry_id is None:
+            await retry_store.enqueue(
+                source=item.source,
+                external_id=item.external_id,
+                payload_json=_retry_payload(item),
+                content_kind=content_kind,
+                quota_source=quota_source,
+                quota_day=quota_day.isoformat() if quota_day is not None else None,
+                quota_limit=quota_limit,
+                error=safe_error,
+                expires_hours=RETRY_TTL_HOURS.get(content_kind, 6),
+            )
+        else:
+            status = await retry_store.reschedule(
+                retry_id,
+                error=safe_error,
+            )
+            if status == "missing":
+                raise RuntimeError("Запись очереди повторов не найдена")
+            log.warning(
+                "processing_retry_rescheduled source=%s external_id=%s "
+                "retry_id=%s status=%s",
+                item.source,
+                item.external_id,
+                retry_id,
+                status,
+            )
+    except Exception:
+        log.exception(
+            "processing_retry_persist_failed source=%s external_id=%s",
+            item.source,
+            item.external_id,
+        )
+        try:
+            await db.release_claim(item.source, item.external_id)
+        except Exception:
+            log.exception(
+                "processing_retry_claim_release_failed source=%s external_id=%s",
+                item.source,
+                item.external_id,
+            )
 
 
 def _publication_fingerprint(analysis: FilterResult) -> EventFingerprint:
@@ -59,17 +154,39 @@ async def process_item(
     quota_source: str | None = None,
     quota_day: date | None = None,
     quota_limit: int | None = None,
+    retry_id: int | None = None,
 ) -> ProcessResult:
-    if not await db.claim_message(item.source, item.external_id):
+    if retry_id is None and not await db.claim_message(item.source, item.external_id):
         return ProcessResult(
             "duplicate", item.source, item.external_id, source_url=item.article_url,
         )
 
-    recent_posts = await db.recent_published_context(
-        hours=cfg.dedup_context_hours,
-        limit=cfg.dedup_context_limit,
-    )
-    emoji_map = emoji_store.load()
+    try:
+        recent_posts = await db.recent_published_context(
+            hours=cfg.dedup_context_hours,
+            limit=cfg.dedup_context_limit,
+        )
+        emoji_map = emoji_store.load()
+    except Exception as exc:
+        log.exception(
+            "RSS processing context failed for %s/%s",
+            item.source,
+            item.external_id,
+        )
+        await _defer_processing(
+            item,
+            content_kind=content_kind,
+            quota_source=quota_source,
+            quota_day=quota_day,
+            quota_limit=quota_limit,
+            retry_id=retry_id,
+            error=exc,
+        )
+        return ProcessResult(
+            "error", item.source, item.external_id,
+            reason=f"{type(exc).__name__}: {exc}",
+            source_url=item.article_url,
+        )
     try:
         ai_kwargs = {
             "text": item.ai_text[:MAX_AI_INPUT_CHARS],
@@ -81,7 +198,15 @@ async def process_item(
         analysis = await content_ai.filter_and_rewrite(**ai_kwargs)
     except Exception as exc:
         log.exception("RSS AI analysis failed for %s/%s", item.source, item.external_id)
-        await db.release_claim(item.source, item.external_id)
+        await _defer_processing(
+            item,
+            content_kind=content_kind,
+            quota_source=quota_source,
+            quota_day=quota_day,
+            quota_limit=quota_limit,
+            retry_id=retry_id,
+            error=exc,
+        )
         return ProcessResult(
             "ai_error", item.source, item.external_id,
             reason=f"{type(exc).__name__}: {exc}",
@@ -89,7 +214,15 @@ async def process_item(
         )
 
     if analysis is None:
-        await db.release_claim(item.source, item.external_id)
+        await _defer_processing(
+            item,
+            content_kind=content_kind,
+            quota_source=quota_source,
+            quota_day=quota_day,
+            quota_limit=quota_limit,
+            retry_id=retry_id,
+            error="AI-сервис не вернул валидный ответ",
+        )
         return ProcessResult(
             "ai_error", item.source, item.external_id,
             reason="AI-сервис не вернул валидный ответ",
@@ -101,9 +234,26 @@ async def process_item(
             reason=analysis.reason, source_url=item.article_url,
         )
 
-    emoji_theme = emoji_store.detect_override(
-        emoji_map, f"{analysis.title}\n{analysis.body}",
-    ) or analysis.emoji_theme
+    try:
+        emoji_theme = emoji_store.detect_override(
+            emoji_map, f"{analysis.title}\n{analysis.body}",
+        ) or analysis.emoji_theme
+    except Exception as exc:
+        log.exception("RSS formatting setup failed for %s/%s", item.source, item.external_id)
+        await _defer_processing(
+            item,
+            content_kind=content_kind,
+            quota_source=quota_source,
+            quota_day=quota_day,
+            quota_limit=quota_limit,
+            retry_id=retry_id,
+            error=exc,
+        )
+        return ProcessResult(
+            "error", item.source, item.external_id,
+            reason=f"{type(exc).__name__}: {exc}", title=analysis.title,
+            source_url=item.article_url,
+        )
     inline_links: list[tuple[str, str]] = []
     custom_emojis = ()
     if cfg.emoji_autocreate_enabled:
@@ -139,16 +289,33 @@ async def process_item(
                 log.warning("Wowhead reference lookup failed: %s", type(url).__name__)
             elif url:
                 inline_links.append((reference.label, url))
-    post_text = tg_writer.format_post(
-        analysis.title,
-        analysis.body,
-        emoji_theme=emoji_theme,
-        emoji_map=emoji_map,
-        hashtag_key=analysis.hashtag,
-        inline_links=inline_links,
-        custom_emojis=custom_emojis,
-        subscribe_emoji_id=cfg.subscribe_emoji_id,
-    )
+    try:
+        post_text = tg_writer.format_post(
+            analysis.title,
+            analysis.body,
+            emoji_theme=emoji_theme,
+            emoji_map=emoji_map,
+            hashtag_key=analysis.hashtag,
+            inline_links=inline_links,
+            custom_emojis=custom_emojis,
+            subscribe_emoji_id=cfg.subscribe_emoji_id,
+        )
+    except Exception as exc:
+        log.exception("RSS formatting failed for %s/%s", item.source, item.external_id)
+        await _defer_processing(
+            item,
+            content_kind=content_kind,
+            quota_source=quota_source,
+            quota_day=quota_day,
+            quota_limit=quota_limit,
+            retry_id=retry_id,
+            error=exc,
+        )
+        return ProcessResult(
+            "error", item.source, item.external_id,
+            reason=f"{type(exc).__name__}: {exc}", title=analysis.title,
+            source_url=item.article_url,
+        )
 
     try:
         reservation = await publication_guard.reserve_publication(
@@ -161,7 +328,15 @@ async def process_item(
         )
     except Exception as exc:
         log.exception("Publication reservation failed for %s/%s", item.source, item.external_id)
-        await db.release_claim(item.source, item.external_id)
+        await _defer_processing(
+            item,
+            content_kind=content_kind,
+            quota_source=quota_source,
+            quota_day=quota_day,
+            quota_limit=quota_limit,
+            retry_id=retry_id,
+            error=exc,
+        )
         return ProcessResult(
             "error", item.source, item.external_id,
             reason=f"{type(exc).__name__}: {exc}", title=analysis.title,
@@ -281,8 +456,22 @@ async def process_item(
             )
     except Exception as exc:
         log.exception("RSS publish failed for %s/%s", item.source, item.external_id)
-        await publication_guard.fail_publication(reservation.reservation_id, str(exc))
-        await db.release_claim(item.source, item.external_id)
+        try:
+            await publication_guard.fail_publication(
+                reservation.reservation_id,
+                str(exc),
+            )
+        except Exception:
+            log.exception("Failed to release publication reservation")
+        await _defer_processing(
+            item,
+            content_kind=content_kind,
+            quota_source=quota_source,
+            quota_day=quota_day,
+            quota_limit=quota_limit,
+            retry_id=retry_id,
+            error=exc,
+        )
         return ProcessResult(
             "error", item.source, item.external_id,
             reason=f"{type(exc).__name__}: {exc}", title=analysis.title,
@@ -290,13 +479,26 @@ async def process_item(
         )
 
     if target_message_id is None:
-        await publication_guard.fail_publication(
-            reservation.reservation_id, "Telegram API отказал в публикации",
+        failure = "Telegram API отказал в публикации"
+        try:
+            await publication_guard.fail_publication(
+                reservation.reservation_id,
+                failure,
+            )
+        except Exception:
+            log.exception("Failed to release publication reservation")
+        await _defer_processing(
+            item,
+            content_kind=content_kind,
+            quota_source=quota_source,
+            quota_day=quota_day,
+            quota_limit=quota_limit,
+            retry_id=retry_id,
+            error=failure,
         )
-        await db.release_claim(item.source, item.external_id)
         return ProcessResult(
             "publish_failed", item.source, item.external_id,
-            reason="Telegram API отказал в публикации", title=analysis.title,
+            reason=failure, title=analysis.title,
             source_url=item.article_url,
         )
     await publication_guard.complete_publication(
@@ -312,6 +514,71 @@ async def process_item(
         reason=analysis.reason, title=analysis.title,
         source_url=item.article_url,
     )
+
+
+async def retry_due_items(
+    *,
+    bot: Bot,
+    cfg: Config,
+    content_ai: ContentAI,
+    on_result: ResultCallback | None = None,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    current_time = (now or datetime.now(UTC)).astimezone(UTC)
+    due = await retry_store.due(
+        limit=RETRY_LIMIT_PER_RUN,
+        now=current_time,
+    )
+    processed = 0
+    published = 0
+    failed = 0
+    terminal_statuses = {"published", "filtered", "duplicate", "daily_limit"}
+    for retry in due:
+        retry_id = int(retry["id"])
+        try:
+            item = _retry_item(str(retry["payload_json"]))
+            quota_source = retry["quota_source"]
+            result = await process_item(
+                bot=bot,
+                cfg=cfg,
+                item=item,
+                content_ai=content_ai,
+                content_kind=str(retry["content_kind"]),
+                quota_source=str(quota_source) if quota_source else None,
+                quota_day=current_time.date() if quota_source else None,
+                quota_limit=(
+                    int(retry["quota_limit"])
+                    if retry["quota_limit"] is not None
+                    else None
+                ),
+                retry_id=retry_id,
+            )
+        except Exception as exc:
+            failed += 1
+            log.exception("processing_retry_crashed retry_id=%s", retry_id)
+            await retry_store.reschedule(retry_id, error=str(exc))
+            continue
+        processed += 1
+        if result.status in terminal_statuses:
+            await retry_store.delete(retry_id)
+        else:
+            failed += 1
+        if result.status == "published":
+            published += 1
+        if (
+            on_result is not None
+            and result.status in {"published", "filtered"}
+        ):
+            try:
+                await on_result(result)
+            except Exception:
+                log.exception("Retry on_result callback failed")
+    return {
+        "due": len(due),
+        "processed": processed,
+        "published": published,
+        "failed": failed,
+    }
 
 
 async def run_once(
@@ -352,6 +619,9 @@ async def run_once(
         if result.status == "published":
             selected += 1
             published += 1
+        elif result.status in {"ai_error", "error", "publish_failed"}:
+            detail = result.reason[:240] or result.status
+            errors.append(f"{item.source}/{item.external_id}: {detail}")
         if on_result is not None and result.status != "duplicate":
             try:
                 await on_result(result)
