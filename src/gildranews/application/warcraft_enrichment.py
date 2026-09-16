@@ -17,6 +17,7 @@ from gildranews.adapters.warcraft.icons import IconError, fetch_and_normalize_ic
 from gildranews.config import Config
 from gildranews.domain.models import (
     MAX_ENTITY_EMOJIS_PER_POST,
+    MAX_WARCRAFT_REFERENCES_PER_POST,
     TelegramEmojiAsset,
     WarcraftEntityRef,
 )
@@ -31,14 +32,14 @@ _WOW_FOREVER_RE = re.compile(r"\bWoW\s*:?\s*Forever\b", re.IGNORECASE)
 
 _KIND_PRIORITY = {
     "expansion": -1,
-    "spell": 0,
-    "talent": 1,
-    "item": 2,
-    "boss": 3,
-    "class": 4,
-    "specialization": 5,
-    "raid": 6,
-    "dungeon": 7,
+    "raid": 0,
+    "dungeon": 0,
+    "boss": 1,
+    "spell": 2,
+    "talent": 3,
+    "item": 4,
+    "class": 5,
+    "specialization": 6,
 }
 
 
@@ -76,7 +77,7 @@ async def enrich(
             0 if ref.role == "primary" else 1,
             _KIND_PRIORITY.get(ref.kind, 20),
         ),
-    )[:MAX_ENTITY_EMOJIS_PER_POST]
+    )[:MAX_WARCRAFT_REFERENCES_PER_POST]
     registry = TelegramEmojiRegistry(
         bot,
         owner_user_id=cfg.admin_user_id,

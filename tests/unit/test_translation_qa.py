@@ -2,6 +2,7 @@ from gildranews.application.translation_qa import (
     artificial_style_markers,
     normalize_wow_class_terms,
     normalize_wow_expansion_names,
+    normalize_wow_ptr_terms,
     normalize_wow_specialization_terms,
     presentation_issues,
     specialization_issues,
@@ -55,6 +56,16 @@ def test_other_translated_expansion_names_are_restored_from_source() -> None:
         "Midnight выйдет после The War Within, а до них были Dragonflight "
         "и Shadowlands."
     )
+
+
+def test_normalize_wow_ptr_terms_keeps_the_official_abbreviation() -> None:
+    source = "Class changes are now available on the 12.1.5 PTR."
+
+    assert normalize_wow_ptr_terms(
+        source,
+        "Изменения появились в тестовом игровом мире.",
+    ) == "Изменения появились на PTR."
+    assert untranslated_terms("Изменения появились на PTR.") == ()
 
 
 def test_normalize_wow_class_terms_distinguishes_mage_from_warlock() -> None:

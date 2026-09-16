@@ -51,6 +51,7 @@ _WOWHEAD_ENTITY_PATH_RE = re.compile(
     r"|class=\d+(?:/[a-z0-9-]+)?"
     r")$"
 )
+_WOWHEAD_SPELL_PATH_RE = re.compile(r"^/(?:classic/)?spell=\d+$")
 _CUSTOM_EMOJI_RE = re.compile(
     r'<tg-emoji\s+emoji-id="[0-9]+">(.*?)</tg-emoji>',
     re.DOTALL,
@@ -245,9 +246,10 @@ def _linkify(
             break
         position, _negative_length, index, label, url = min(matches)
         parts.append(html_escape(text[cursor:position]))
-        parts.append(
-            f'<a href="{escape(url, quote=True)}">{html_escape(label)}</a>'
-        )
+        linked = f'<a href="{escape(url, quote=True)}">{html_escape(label)}</a>'
+        if _WOWHEAD_SPELL_PATH_RE.fullmatch(urlparse(url).path):
+            linked = f"<i>{linked}</i>"
+        parts.append(linked)
         cursor = position + len(label)
         remaining.pop(index)
     parts.append(html_escape(text[cursor:]))
@@ -394,6 +396,10 @@ def _insert_before_visible_label(
             anchor_open = rendered.rfind("<a ", 0, position)
             anchor_close = rendered.rfind("</a>", 0, position)
             insertion = anchor_open if anchor_open > anchor_close else position
+            italic_open = rendered.rfind("<i>", 0, insertion)
+            italic_close = rendered.rfind("</i>", 0, insertion)
+            if italic_open > italic_close:
+                insertion = italic_open
             return rendered[:insertion] + prefix + rendered[insertion:], True
         cursor = position + len(needle)
     return rendered, False

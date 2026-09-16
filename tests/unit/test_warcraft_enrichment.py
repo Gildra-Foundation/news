@@ -80,22 +80,28 @@ async def test_enricher_prioritizes_primary_entity_and_limits_post_to_four(
             WarcraftEntityRef("Огненный шар", "Fireball", "spell", role="primary"),
             WarcraftEntityRef("Посох", "Staff", "item", role="secondary"),
             WarcraftEntityRef("Дракон", "Dragon", "boss", role="secondary"),
+            WarcraftEntityRef(
+                "Ядовитая Бездна", "Venomous Abyss", "raid", role="secondary",
+            ),
             WarcraftEntityRef("Лёд", "Frost Mage", "specialization", role="secondary"),
         ),
     )
 
-    assert resolved_order == ["Fireball", "Staff", "Dragon", "Mage"]
+    assert resolved_order == [
+        "Fireball", "Venomous Abyss", "Dragon", "Staff", "Mage", "Frost Mage",
+    ]
     assert [asset.custom_emoji_id for asset in result.emojis] == ["1", "2", "3", "4"]
     assert result.inline_links == (
         ("Огненный шар", "https://www.wowhead.com/spell=1"),
-        ("Посох", "https://www.wowhead.com/spell=2"),
+        ("Ядовитая Бездна", "https://www.wowhead.com/spell=2"),
         ("Дракон", "https://www.wowhead.com/spell=3"),
+        ("Посох", "https://www.wowhead.com/spell=4"),
     )
     assert [asset.placement_label for asset in result.emojis] == [
         "Огненный шар",
-        "Посох",
+        "Ядовитая Бездна",
         "Дракон",
-        "Маг",
+        "Посох",
     ]
 
 

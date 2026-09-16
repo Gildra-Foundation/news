@@ -112,6 +112,7 @@ WarcraftEntityKind = Literal[
 ]
 WarcraftEntityRole = Literal["primary", "secondary"]
 MAX_ENTITY_EMOJIS_PER_POST = 4
+MAX_WARCRAFT_REFERENCES_PER_POST = 8
 
 
 @dataclass(frozen=True, slots=True)

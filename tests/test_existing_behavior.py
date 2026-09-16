@@ -195,7 +195,20 @@ def test_post_formatter_places_emoji_outside_linked_entity_name() -> None:
 
     assert result.startswith(
         '<b><tg-emoji emoji-id="123">✨</tg-emoji> '
-        '<a href="https://www.wowhead.com/spell=133">Огненный шар</a> усилят</b>'
+        '<i><a href="https://www.wowhead.com/spell=133">Огненный шар</a></i> усилят</b>'
+    )
+
+
+def test_post_formatter_renders_wowhead_spell_links_in_italics() -> None:
+    result = tg_writer.format_post(
+        title="Магам усилили Огненный шар",
+        body="Урон способности вырос.",
+        inline_links=(("Огненный шар", "https://www.wowhead.com/spell=133"),),
+    )
+
+    assert (
+        '<i><a href="https://www.wowhead.com/spell=133">Огненный шар</a></i>'
+        in result
     )
 
 

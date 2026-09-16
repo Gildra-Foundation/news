@@ -475,6 +475,29 @@ async def test_luna_normalizes_mage_mistranslation_before_publication() -> None:
 
 
 @pytest.mark.asyncio
+async def test_luna_keeps_ptr_instead_of_test_server_wording() -> None:
+    processor = AppServerContentAI(
+        _StubAppServer(
+            {
+                "is_news": True,
+                "reason": "Обновление проверки",
+                "title": "Изменения появились в тестовом игровом мире",
+                "body": "Игроки могут проверить новые механики на тестовом сервере.",
+                "hashtag": "новости",
+            },
+        ),
+    )
+
+    result = await processor.filter_and_rewrite(
+        "The 12.1.5 update is now available on the PTR.", [], [],
+    )
+
+    assert result is not None
+    assert result.title == "Изменения появились на PTR"
+    assert result.body == "Игроки могут проверить новые механики на PTR."
+
+
+@pytest.mark.asyncio
 async def test_luna_repairs_untranslated_raid_terms_before_publication() -> None:
     app_server = _SequenceAppServer(
         [
@@ -815,6 +838,48 @@ async def test_luna_repairs_named_raid_post_without_reference() -> None:
     assert result is not None
     assert [(reference.query, reference.kind) for reference in result.references] == [
         ("Venomous Abyss", "raid"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_luna_requires_raid_reference_even_when_boss_reference_exists() -> None:
+    app_server = _SequenceAppServer(
+        [
+            {
+                "is_news": True,
+                "reason": "Ослабление рейда",
+                "title": "В Ядовитой Бездне ослабят Сзорака",
+                "body": "Бой с Сзораком станет проще.",
+                "hashtag": "новости",
+                "references": [
+                    {"label": "Сзораком", "query": "Sszorak", "kind": "boss"},
+                ],
+            },
+            {
+                "title": "В Ядовитой Бездне ослабят Сзорака",
+                "body": "Бой с Сзораком станет проще.",
+                "hashtag": "новости",
+                "references": [
+                    {
+                        "label": "Ядовитой Бездне",
+                        "query": "Venomous Abyss",
+                        "kind": "raid",
+                        "role": "primary",
+                    },
+                    {"label": "Сзораком", "query": "Sszorak", "kind": "boss"},
+                ],
+            },
+        ],
+    )
+
+    result = await AppServerContentAI(app_server).filter_and_rewrite(
+        "Venomous Abyss raid boss Sszorak will be nerfed.", [], [],
+    )
+
+    assert result is not None
+    assert [(reference.query, reference.kind) for reference in result.references] == [
+        ("Venomous Abyss", "raid"),
+        ("Sszorak", "boss"),
     ]
 
 

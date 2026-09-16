@@ -9,7 +9,7 @@ _LINK_RE = re.compile(r"https?://[^\s)>]+")
 _CODE_RE = re.compile(r"`[^`]+`")
 _LATIN_WORD_RE = re.compile(r"[A-Za-z]+(?:['’][A-Za-z]+)?")
 _ALLOWED_LATIN_WORDS = frozenset(
-    {"blizzard", "classic", "forever", "retail", "world", "of", "warcraft", "wow"}
+    {"blizzard", "classic", "forever", "ptr", "retail", "world", "of", "warcraft", "wow"}
 )
 WOW_EXPANSION_NAMES = (
     "The Last Titan",
@@ -131,6 +131,16 @@ _RESTORATION_DRUID_FORMS = {
     "восстановлением": "исцелением",
     "восстановлении": "исцелении",
 }
+_PTR_SOURCE_RE = re.compile(r"\bPTR\b", re.IGNORECASE)
+_PTR_LOCATION_RE = re.compile(
+    r"\b(?P<prep>в|на)\s+тестов\w*\s+"
+    r"(?:(?:игров\w*)\s+)?(?:сервер\w*|мир\w*)",
+    re.IGNORECASE,
+)
+_PTR_TERM_RE = re.compile(
+    r"\bтестов\w*\s+(?:(?:игров\w*)\s+)?(?:сервер\w*|мир\w*)",
+    re.IGNORECASE,
+)
 
 
 def _preserve_case(source: str, replacement: str) -> str:
@@ -172,6 +182,18 @@ def normalize_wow_specialization_terms(source: str, translated: str) -> str:
         )
 
     return _RESTORATION_DRUID_TRANSLATION_RE.sub(replace, translated)
+
+
+def normalize_wow_ptr_terms(source: str, translated: str) -> str:
+    """Keep PTR as the official, familiar name instead of a literal paraphrase."""
+    if not _PTR_SOURCE_RE.search(source):
+        return translated
+
+    def replace_location(match: re.Match[str]) -> str:
+        return "На PTR" if match.group(0)[:1].isupper() else "на PTR"
+
+    result = _PTR_LOCATION_RE.sub(replace_location, translated)
+    return _PTR_TERM_RE.sub("PTR", result)
 
 
 def normalize_wow_expansion_names(source: str, translated: str) -> str:

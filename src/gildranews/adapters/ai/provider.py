@@ -18,6 +18,7 @@ from gildranews.application.translation_qa import (
     check_translation,
     normalize_wow_class_terms,
     normalize_wow_expansion_names,
+    normalize_wow_ptr_terms,
     normalize_wow_specialization_terms,
     presentation_issues,
     specialization_issues,
@@ -25,7 +26,7 @@ from gildranews.application.translation_qa import (
     untranslated_terms,
 )
 from gildranews.domain.models import (
-    MAX_ENTITY_EMOJIS_PER_POST,
+    MAX_WARCRAFT_REFERENCES_PER_POST,
     EntityReference,
     EventFingerprint,
     FilterResult,
@@ -47,7 +48,6 @@ _STORY_CONTEXT_LIMIT = 50
 _STORY_BODY_LIMIT = 420
 _VOICE_CONTEXT_LIMIT = 5
 _VOICE_BODY_LIMIT = 700
-_LINKABLE_CONTEXT_RE = re.compile(r"\b(?:raid|dungeon|boss)\b", re.IGNORECASE)
 _NAMED_GAME_OBJECT_RE = re.compile(
     r"\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+)+\b",
 )
@@ -76,7 +76,8 @@ _FILTER_JSON_SUFFIX = """
 {"is_news":true,"reason":"...","title":"...","body":"...","emoji_theme":"...","hashtag":"...","infographic":null,"references":[],"fingerprint":{"game_branch":"retail","version":"12.2.5","subject":"стабильное название события","action":"ослабить босса","status":"announced","effective_date":"","scope":[],"material_facts":[]}}
 infographic может быть объектом с полями kicker, title, facts (2–4 объектов value/label), source="". Каждое value должно дословно встречаться во входном post. Для отклонённой новости infographic=null. Не добавляй источник, URL или название издания в title/body.
 fingerprint обязателен для принятой новости. Он описывает само событие, а не статью: game_branch=retail|classic|forever; version — версия игры; subject — короткий устойчивый объект изменения; action — короткое действие; status — announced|testing|scheduled|live|cancelled или пусто; effective_date — точная дата либо пусто; scope и material_facts содержат только существенные факты из post. Для одного события в разных источниках выбирай одинаковые subject и action. Дополнительные примеры и пересказ не являются новым фактом.
-references — не более четырёх объектов {"label":"точный текст из title/body","query":"точное исходное английское имя из post","kind":"class|specialization|spell|talent|item|cosmetic|transmog_set|mount|pet|achievement|raid|dungeon|boss|creature|faction|profession|event|expansion","branch":"retail|classic|forever","role":"primary|secondary"}. Название дополнения сохраняй на английском и помечай kind=expansion. URL, ID и изображения не придумывай: их найдёт бот. Главную изменяемую сущность пометь primary, остальные secondary. Для остальных случаев references=[].
+references — не более восьми объектов {"label":"точный текст из title/body","query":"точное исходное английское имя из post","kind":"class|specialization|spell|talent|item|cosmetic|transmog_set|mount|pet|achievement|raid|dungeon|boss|creature|faction|profession|event|expansion","branch":"retail|classic|forever","role":"primary|secondary"}. Название дополнения сохраняй на английском и помечай kind=expansion. URL, ID и изображения не придумывай: их найдёт бот. Главную изменяемую сущность пометь primary, остальные secondary. Для остальных случаев references=[].
+Каждый названный рейд обязательно включай отдельной reference с kind=raid, даже если уже добавлен его босс, существо или способность.
 Для новости об изменениях класса обязательно добавь две references: изменённую способность или талант как primary и её специализацию как secondary. Для specialization в query укажи полную пару «специализация + класс», например Restoration Druid.
 В рейтинге специализаций включи в references две самые важные специализации с kind=specialization для значков и названный рейд с kind=raid для ссылки. Для специализаций используй точные английские названия из post; классы отдельными references не добавляй.
 Если материал относится к WoW: Forever, обязательно включи reference с label="WoW: Forever", query="WoW: Forever", kind="expansion", branch="forever", role="primary".
@@ -100,6 +101,8 @@ _RUSSIAN_REPAIR_PROMPT = """Ты — выпускающий редактор р�
 — одно предложение — одна мысль; длинную фразу раздели на две;
 — не используй точку с запятой: она перегружает текст;
 — не заключай в кавычки названия способностей, талантов, классов и специализаций;
+— PTR всегда пиши как PTR; не заменяй его словами «тестовый сервер» или «тестовый игровой мир»;
+— каждый названный рейд сохраняй в title или body и добавляй отдельной reference с kind=raid, даже если уже есть reference его босса;
 — если способность лечит другие цели на процент от своего лечения, прямо назови способность, цели и от чего считается процент;
 — recent_published используй как индекс уже опубликованных сюжетов: оставь в центре только новый факт;
 — recent_voice_examples задают только длину и ритм канала; не копируй из них формулировки;
@@ -255,6 +258,13 @@ def _event_fingerprint(value: _FingerprintOutput | None) -> EventFingerprint | N
     )
 
 
+def _normalize_public_text(source: str, value: str) -> str:
+    normalized = normalize_wow_class_terms(source, value.strip())
+    normalized = normalize_wow_specialization_terms(source, normalized)
+    normalized = normalize_wow_ptr_terms(source, normalized)
+    return normalize_wow_expansion_names(source, normalized)
+
+
 def _references(
     values: list[_ReferenceOutput],
     source: str,
@@ -285,7 +295,7 @@ def _references(
                 role=value.role,
             )
         )
-        if len(references) == MAX_ENTITY_EMOJIS_PER_POST:
+        if len(references) == MAX_WARCRAFT_REFERENCES_PER_POST:
             break
     return tuple(references)
 
@@ -295,11 +305,20 @@ def _reference_issues(
     references: tuple[EntityReference, ...],
 ) -> tuple[str, ...]:
     """Require a resolvable entity for posts about a specifically named instance."""
-    if any(reference.kind in {"raid", "dungeon", "boss"} for reference in references):
+    if not _NAMED_GAME_OBJECT_RE.search(source):
         return ()
-    if _LINKABLE_CONTEXT_RE.search(source) and _NAMED_GAME_OBJECT_RE.search(source):
-        return ("named_instance_without_reference",)
-    return ()
+    issues: list[str] = []
+    required = {
+        "raid": {"raid"},
+        "dungeon": {"dungeon"},
+        "boss": {"boss", "creature"},
+    }
+    for source_kind, accepted_kinds in required.items():
+        if not re.search(rf"\b{source_kind}\b", source, re.IGNORECASE):
+            continue
+        if not any(reference.kind in accepted_kinds for reference in references):
+            issues.append(f"named_{source_kind}_without_reference")
+    return tuple(issues)
 
 
 def _specialization_reference_issues(
@@ -365,18 +384,8 @@ class AppServerContentAI:
         *,
         verify_translation: bool = False,
     ) -> Rewrite | None:
-        title = normalize_wow_expansion_names(
-            source,
-            normalize_wow_specialization_terms(
-                source, normalize_wow_class_terms(source, output.title.strip()),
-            ),
-        )
-        body = normalize_wow_expansion_names(
-            source,
-            normalize_wow_specialization_terms(
-                source, normalize_wow_class_terms(source, output.body.strip()),
-            ),
-        )
+        title = _normalize_public_text(source, output.title)
+        body = _normalize_public_text(source, output.body)
         if not title or not body:
             return None
         before_editor = f"{title}\n\n{body}"
@@ -391,12 +400,7 @@ class AppServerContentAI:
             return None
         if self._editor is not None:
             edited_body = await self._editor.edit(body)
-            edited_body = normalize_wow_expansion_names(
-                source,
-                normalize_wow_specialization_terms(
-                    source, normalize_wow_class_terms(source, edited_body),
-                ),
-            )
+            edited_body = _normalize_public_text(source, edited_body)
             if check_translation(before_editor, f"{title}\n\n{edited_body}").ready_for_editor:
                 body = edited_body
         body = split_dense_paragraphs(body)
