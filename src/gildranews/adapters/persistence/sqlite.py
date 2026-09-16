@@ -8,6 +8,7 @@ from collections.abc import Iterable, Sequence
 import aiosqlite
 
 from gildranews.domain.models import (
+    MAX_ENTITY_EMOJIS_PER_POST,
     PublishedPostContext,
     ResolvedWarcraftEntity,
     TelegramEmojiAsset,
@@ -745,7 +746,7 @@ async def create_draft(
                 "fallback": asset.fallback,
                 "placement_label": asset.placement_label,
             }
-            for asset in custom_emojis[:2]
+            for asset in custom_emojis[:MAX_ENTITY_EMOJIS_PER_POST]
         ],
         ensure_ascii=False,
     )
@@ -809,7 +810,7 @@ async def set_draft_enrichment(
                 "fallback": asset.fallback,
                 "placement_label": asset.placement_label,
             }
-            for asset in custom_emojis[:2]
+            for asset in custom_emojis[:MAX_ENTITY_EMOJIS_PER_POST]
         ],
         ensure_ascii=False,
     )

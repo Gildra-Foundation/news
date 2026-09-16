@@ -111,6 +111,7 @@ WarcraftEntityKind = Literal[
     "expansion",
 ]
 WarcraftEntityRole = Literal["primary", "secondary"]
+MAX_ENTITY_EMOJIS_PER_POST = 4
 
 
 @dataclass(frozen=True, slots=True)

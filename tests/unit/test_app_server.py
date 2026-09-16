@@ -128,12 +128,18 @@ async def test_class_changes_require_ability_and_specialization_references() -> 
                 "is_news": True,
                 "reason": "Изменение класса",
                 "title": "Друидам изменили лечение",
-                "body": "Природное изобилие переработали у друида Восстановления.",
+                "body": (
+                    "Природное изобилие переработали у друида Исцеления. "
+                    "У пробудителя Сохранения изменили Благословение Меритры."
+                ),
                 "hashtag": "новости",
             },
             {
                 "title": "Друидам изменили лечение",
-                "body": "Природное изобилие переработали у друида Восстановления.",
+                "body": (
+                    "Природное изобилие переработали у друида Исцеления. "
+                    "У пробудителя Сохранения изменили Благословение Меритры."
+                ),
                 "hashtag": "новости",
                 "references": [
                     {
@@ -143,8 +149,20 @@ async def test_class_changes_require_ability_and_specialization_references() -> 
                         "role": "primary",
                     },
                     {
-                        "label": "Восстановления",
+                        "label": "Исцеления",
                         "query": "Restoration Druid",
+                        "kind": "specialization",
+                        "role": "secondary",
+                    },
+                    {
+                        "label": "Благословение Меритры",
+                        "query": "Merithra's Blessing",
+                        "kind": "spell",
+                        "role": "secondary",
+                    },
+                    {
+                        "label": "Сохранения",
+                        "query": "Preservation Evoker",
                         "kind": "specialization",
                         "role": "secondary",
                     },
@@ -154,7 +172,10 @@ async def test_class_changes_require_ability_and_specialization_references() -> 
     )
 
     result = await AppServerContentAI(app_server).filter_and_rewrite(
-        "CLASS TUNING\nDRUID\nRestoration\nNature's Bounty has been redesigned.",
+        (
+            "CLASS TUNING\nDRUID\nRestoration\nNature's Bounty has been redesigned.\n"
+            "EVOKER\nPreservation\nMerithra's Blessing duration changed."
+        ),
         [],
         [],
     )
@@ -163,6 +184,8 @@ async def test_class_changes_require_ability_and_specialization_references() -> 
     assert [(ref.kind, ref.query) for ref in result.references] == [
         ("spell", "Nature's Bounty"),
         ("specialization", "Restoration Druid"),
+        ("spell", "Merithra's Blessing"),
+        ("specialization", "Preservation Evoker"),
     ]
 
 

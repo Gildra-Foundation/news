@@ -15,7 +15,11 @@ from gildranews.adapters.warcraft.emoji_registry import (
 )
 from gildranews.adapters.warcraft.icons import IconError, fetch_and_normalize_icon
 from gildranews.config import Config
-from gildranews.domain.models import TelegramEmojiAsset, WarcraftEntityRef
+from gildranews.domain.models import (
+    MAX_ENTITY_EMOJIS_PER_POST,
+    TelegramEmojiAsset,
+    WarcraftEntityRef,
+)
 
 log = logging.getLogger(__name__)
 
@@ -67,12 +71,12 @@ async def enrich(
     if not references:
         return WarcraftEnrichment(emojis=tuple(emojis))
     ordered = sorted(
-        references[:3],
+        references,
         key=lambda ref: (
             0 if ref.role == "primary" else 1,
             _KIND_PRIORITY.get(ref.kind, 20),
         ),
-    )
+    )[:MAX_ENTITY_EMOJIS_PER_POST]
     registry = TelegramEmojiRegistry(
         bot,
         owner_user_id=cfg.admin_user_id,
@@ -92,7 +96,7 @@ async def enrich(
                 emoji_id = EXPANSION_EMOJI_IDS.get(reference.query.casefold().strip(), "")
                 if (
                     emoji_id.isdigit()
-                    and len(emojis) < 2
+                    and len(emojis) < MAX_ENTITY_EMOJIS_PER_POST
                     and all(asset.custom_emoji_id != emoji_id for asset in emojis)
                 ):
                     emojis.append(
@@ -114,7 +118,7 @@ async def enrich(
                 continue
             if reference.kind not in {"class", "specialization"}:
                 links.append((reference.label, entity.page_url))
-            if len(emojis) >= 2 or not entity.icon_url:
+            if len(emojis) >= MAX_ENTITY_EMOJIS_PER_POST or not entity.icon_url:
                 continue
             try:
                 icon = await fetch_and_normalize_icon(

@@ -432,6 +432,12 @@ async def test_specialization_resolver_uses_verified_core_catalog_without_networ
             1263879,
             "talentspec_druid_restoration",
         ),
+        (
+            "Merithra's Blessing",
+            "Благословение Меритры",
+            1256577,
+            "inv12_apextalent_evoker_merithrasblessing",
+        ),
     ],
 )
 async def test_spell_resolver_uses_verified_ability_catalog_without_network(

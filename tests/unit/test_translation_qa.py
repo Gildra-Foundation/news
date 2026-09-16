@@ -2,6 +2,7 @@ from gildranews.application.translation_qa import (
     artificial_style_markers,
     normalize_wow_class_terms,
     normalize_wow_expansion_names,
+    normalize_wow_specialization_terms,
     presentation_issues,
     specialization_issues,
     untranslated_terms,
@@ -72,6 +73,21 @@ def test_normalize_wow_class_terms_preserves_ambiguous_lore_wording() -> None:
     translated = "Маг встречает чернокнижника и безымянного колдуна."
 
     assert normalize_wow_class_terms(source, translated) == translated
+
+
+def test_normalize_wow_specialization_terms_separates_druid_from_spell() -> None:
+    source = (
+        "DRUID\nRestoration\nNature's Bounty causes Regrowth to heal allies."
+    )
+    translated = (
+        "У друида «Восстановления» талант меняет способность "
+        "«Восстановление»."
+    )
+
+    assert normalize_wow_specialization_terms(source, translated) == (
+        "У друида «Исцеления» талант меняет способность "
+        "«Восстановление»."
+    )
 
 
 def test_specialization_issues_detects_ambiguous_augmentation_translation() -> None:

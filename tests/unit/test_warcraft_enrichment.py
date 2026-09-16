@@ -32,7 +32,7 @@ def _cfg(tmp_path: Path) -> Config:
 
 
 @pytest.mark.asyncio
-async def test_enricher_prioritizes_primary_entity_and_limits_post_to_two(
+async def test_enricher_prioritizes_primary_entity_and_limits_post_to_four(
     monkeypatch, tmp_path,
 ) -> None:
     resolved_order: list[str] = []
@@ -79,18 +79,23 @@ async def test_enricher_prioritizes_primary_entity_and_limits_post_to_two(
             WarcraftEntityRef("Маг", "Mage", "class", role="secondary"),
             WarcraftEntityRef("Огненный шар", "Fireball", "spell", role="primary"),
             WarcraftEntityRef("Посох", "Staff", "item", role="secondary"),
+            WarcraftEntityRef("Дракон", "Dragon", "boss", role="secondary"),
+            WarcraftEntityRef("Лёд", "Frost Mage", "specialization", role="secondary"),
         ),
     )
 
-    assert resolved_order == ["Fireball", "Staff", "Mage"]
-    assert [asset.custom_emoji_id for asset in result.emojis] == ["1", "2"]
+    assert resolved_order == ["Fireball", "Staff", "Dragon", "Mage"]
+    assert [asset.custom_emoji_id for asset in result.emojis] == ["1", "2", "3", "4"]
     assert result.inline_links == (
         ("Огненный шар", "https://www.wowhead.com/spell=1"),
         ("Посох", "https://www.wowhead.com/spell=2"),
+        ("Дракон", "https://www.wowhead.com/spell=3"),
     )
     assert [asset.placement_label for asset in result.emojis] == [
         "Огненный шар",
         "Посох",
+        "Дракон",
+        "Маг",
     ]
 
 

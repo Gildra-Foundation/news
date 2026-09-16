@@ -23,7 +23,7 @@ from gildranews.adapters.publishing.rich_message import (
     SendRichMessage,
     build_rich_message,
 )
-from gildranews.domain.models import TelegramEmojiAsset
+from gildranews.domain.models import MAX_ENTITY_EMOJIS_PER_POST, TelegramEmojiAsset
 
 log = logging.getLogger(__name__)
 
@@ -278,11 +278,17 @@ def format_post(
     body = body.strip()
     if len(body) > BODY_HARD_LIMIT:
         body = _smart_truncate(body, BODY_HARD_LIMIT)
+    title = _without_typographic_quotes(title)
+    body = _without_typographic_quotes(body)
 
     display_emojis = [
         asset for asset in (custom_emojis or ())
         if asset.fallback
-    ][:2]
+    ][:MAX_ENTITY_EMOJIS_PER_POST]
+    for asset in display_emojis:
+        if asset.placement_label:
+            title = _without_entity_quotes(title, asset.placement_label)
+            body = _without_entity_quotes(body, asset.placement_label)
     theme_prefix = ""
     if not display_emojis and emoji_theme and emoji_map:
         info = emoji_map.get(emoji_theme)
@@ -352,6 +358,22 @@ def _custom_emoji_html(asset: TelegramEmojiAsset) -> str:
         f'<tg-emoji emoji-id="{asset.custom_emoji_id}">'
         f"{html_escape(asset.fallback)}</tg-emoji>"
     )
+
+
+def _without_entity_quotes(text: str, label: str) -> str:
+    """Remove quotes made redundant by a contextual icon."""
+    visible_label = label.strip()
+    if not visible_label:
+        return text
+    pattern = re.compile(
+        rf"[«„“\"]({re.escape(visible_label)})[»“”\"]",
+    )
+    return pattern.sub(r"\1", text)
+
+
+def _without_typographic_quotes(text: str) -> str:
+    """Keep the channel's clean house style without decorative quotation marks."""
+    return text.translate(str.maketrans("", "", "«»„“”"))
 
 
 def _insert_before_visible_label(

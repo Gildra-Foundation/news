@@ -114,6 +114,23 @@ _RETAIL_CONTEXT_RE = re.compile(
     r"(?:основн|актуальн)\w*\s+верси\w*(?:\s+(?:игры|WoW|World of Warcraft))?|\bRetail\b",
     re.IGNORECASE,
 )
+_RESTORATION_DRUID_SOURCE_RE = re.compile(
+    r"\b(?:druid\b.{0,160}\brestoration|restoration\b.{0,160}\bdruid)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_RESTORATION_DRUID_TRANSLATION_RE = re.compile(
+    r"(?P<prefix>\bдруид[а-яё]*\b(?:\s+специализаци[а-яё]*)?\s+[«„“\"]?)"
+    r"(?P<term>восстановление|восстановления|восстановлению|восстановлением|восстановлении)"
+    r"(?P<suffix>[»“”\"]?)",
+    re.IGNORECASE,
+)
+_RESTORATION_DRUID_FORMS = {
+    "восстановление": "исцеление",
+    "восстановления": "исцеления",
+    "восстановлению": "исцелению",
+    "восстановлением": "исцелением",
+    "восстановлении": "исцелении",
+}
 
 
 def _preserve_case(source: str, replacement: str) -> str:
@@ -138,6 +155,23 @@ def normalize_wow_class_terms(source: str, translated: str) -> str:
         return _preserve_case(original, replacement)
 
     return _SORCERER_RE.sub(replace, translated)
+
+
+def normalize_wow_specialization_terms(source: str, translated: str) -> str:
+    """Keep class specializations distinct from similarly named abilities."""
+    if not _RESTORATION_DRUID_SOURCE_RE.search(source):
+        return translated
+
+    def replace(match: re.Match[str]) -> str:
+        original = match.group("term")
+        replacement = _RESTORATION_DRUID_FORMS[original.casefold()]
+        return (
+            match.group("prefix")
+            + _preserve_case(original, replacement)
+            + match.group("suffix")
+        )
+
+    return _RESTORATION_DRUID_TRANSLATION_RE.sub(replace, translated)
 
 
 def normalize_wow_expansion_names(source: str, translated: str) -> str:

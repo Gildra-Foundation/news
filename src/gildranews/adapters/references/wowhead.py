@@ -120,6 +120,7 @@ _SPECIALIZATION_CATALOG = {
 }
 _SPELL_CATALOG = {
     "hungering slash": (1239519, "inv_12_dh_void_ability_reapersslice"),
+    "merithra's blessing": (1256577, "inv12_apextalent_evoker_merithrasblessing"),
     "nature's bounty": (1263879, "talentspec_druid_restoration"),
 }
 

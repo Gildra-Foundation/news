@@ -107,22 +107,34 @@ def test_post_formatter_embeds_only_safe_wowhead_reference() -> None:
     assert "рейд &amp; получить" in result
 
 
-def test_post_formatter_uses_at_most_two_warcraft_custom_emojis() -> None:
+def test_post_formatter_uses_at_most_four_warcraft_custom_emojis() -> None:
     assets = [
-        TelegramEmojiAsset(str(index), f"file-{index}", "set", "⚔️")
-        for index in range(1, 4)
+        TelegramEmojiAsset(
+            str(index),
+            f"file-{index}",
+            "set",
+            "⚔️",
+            placement_label=f"Сущность {index}",
+        )
+        for index in range(1, 6)
     ]
 
     result = tg_writer.format_post(
-        title="Огненный шар усилят",
-        body="Урон заклинания вырастет.",
+        title="Изменили четыре сущности",
+        body=(
+            "«Сущность 1», «Сущность 2», «Сущность 3», "
+            "«Сущность 4» и «Сущность 5» получили изменения."
+        ),
         custom_emojis=assets,
     )
 
-    assert result.count("<tg-emoji ") == 2
-    assert result.startswith('<tg-emoji emoji-id="1">⚔️</tg-emoji> <b>')
-    assert '\n\n<tg-emoji emoji-id="2">⚔️</tg-emoji> Урон' in result
-    assert 'emoji-id="3"' not in result
+    assert result.count("<tg-emoji ") == 4
+    assert "«" not in result
+    assert "»" not in result
+    assert '«<tg-emoji' not in result
+    assert '</tg-emoji> Сущность 1»' not in result
+    assert 'emoji-id="4"' in result
+    assert 'emoji-id="5"' not in result
 
 
 def test_post_formatter_places_entity_emoji_next_to_body_mention() -> None:
