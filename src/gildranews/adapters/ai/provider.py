@@ -366,6 +366,27 @@ def _combat_reference_issues(
     return ("class_changes_without_ability_and_specialization_references",)
 
 
+def _editorial_issues(
+    source: str,
+    rewrite: Rewrite,
+    branch: WarcraftBranch,
+) -> dict[str, tuple[str, ...]]:
+    public_text = f"{rewrite.title}\n{rewrite.body}"
+    issues = {
+        "untranslated_terms": untranslated_terms(public_text),
+        "artificial_style_markers": artificial_style_markers(public_text),
+        "presentation_issues": presentation_issues(rewrite.title, rewrite.body),
+        "specialization_issues": specialization_issues(source, public_text),
+        "branch_context_issues": branch_context_issues(source, public_text, branch),
+        "reference_issues": (
+            *_reference_issues(source, rewrite.references),
+            *_specialization_reference_issues(source, rewrite.references),
+            *_combat_reference_issues(source, rewrite.references),
+        ),
+    }
+    return {name: values for name, values in issues.items() if values}
+
+
 class AppServerContentAI:
     """Luna-backed content adapter over the server's AG-UI endpoint."""
 
@@ -462,39 +483,35 @@ class AppServerContentAI:
             raise InvalidAIResponseError(
                 "Текст Luna не прошёл проверку сохранности фактов",
             )
-        public_text = f"{rewrite.title}\n{rewrite.body}"
-        terms = untranslated_terms(public_text)
-        style_markers = artificial_style_markers(public_text)
-        layout_issues = presentation_issues(rewrite.title, rewrite.body)
-        spec_issues = specialization_issues(text, public_text)
-        branch_issues = branch_context_issues(
-            text, public_text, fingerprint.game_branch,
-        )
-        reference_issues = (
-            *_reference_issues(text, rewrite.references),
-            *_specialization_reference_issues(text, rewrite.references),
-            *_combat_reference_issues(text, rewrite.references),
-        )
-        if (
-            terms
-            or style_markers
-            or layout_issues
-            or spec_issues
-            or branch_issues
-            or reference_issues
-        ):
+        issues = _editorial_issues(text, rewrite, fingerprint.game_branch)
+        for repair_attempt in range(1, 3):
+            if not issues:
+                break
+            log.info(
+                "editorial_repair_requested attempt=%d issues=%s",
+                repair_attempt,
+                sorted(issues),
+            )
             repaired_output = await self._complete(
                 _RUSSIAN_REPAIR_PROMPT,
                 {
                     "source_text": text[:12_000],
                     "draft_title": rewrite.title,
                     "draft_body": rewrite.body,
-                    "untranslated_terms": list(terms),
-                    "artificial_style_markers": list(style_markers),
-                    "presentation_issues": list(layout_issues),
-                    "specialization_issues": list(spec_issues),
-                    "branch_context_issues": list(branch_issues),
-                    "reference_issues": list(reference_issues),
+                    "untranslated_terms": list(issues.get("untranslated_terms", ())),
+                    "artificial_style_markers": list(
+                        issues.get("artificial_style_markers", ()),
+                    ),
+                    "presentation_issues": list(
+                        issues.get("presentation_issues", ()),
+                    ),
+                    "specialization_issues": list(
+                        issues.get("specialization_issues", ()),
+                    ),
+                    "branch_context_issues": list(
+                        issues.get("branch_context_issues", ()),
+                    ),
+                    "reference_issues": list(issues.get("reference_issues", ())),
                     "recent_published": story_index,
                     "recent_voice_examples": voice_examples,
                 },
@@ -509,9 +526,12 @@ class AppServerContentAI:
                 repaired_output,
                 verify_translation=True,
             )
-            repaired_text = (
-                f"{repaired.title}\n{repaired.body}" if repaired is not None else ""
-            )
+            if repaired is None:
+                log.warning(
+                    "editorial_repair_fidelity_failed attempt=%d",
+                    repair_attempt,
+                )
+                continue
             repaired_references = (
                 _references(
                     repaired_output.references,
@@ -519,26 +539,7 @@ class AppServerContentAI:
                     repaired.title,
                     repaired.body,
                 )
-                if repaired is not None
-                else ()
             ) or rewrite.references
-            if (
-                repaired is None
-                or untranslated_terms(repaired_text)
-                or artificial_style_markers(repaired_text)
-                or presentation_issues(repaired.title, repaired.body)
-                or specialization_issues(text, repaired_text)
-                or branch_context_issues(
-                    text, repaired_text, fingerprint.game_branch,
-                )
-                or _reference_issues(text, repaired_references)
-                or _specialization_reference_issues(text, repaired_references)
-                or _combat_reference_issues(text, repaired_references)
-            ):
-                log.warning("Editorial repair did not pass language and style gates")
-                raise InvalidAIResponseError(
-                    "Текст Luna не прошёл редакционную проверку после исправления",
-                )
             rewrite = Rewrite(
                 title=repaired.title,
                 body=repaired.body,
@@ -547,6 +548,18 @@ class AppServerContentAI:
                 references=(
                     repaired_references
                 ),
+            )
+            issues = _editorial_issues(text, rewrite, fingerprint.game_branch)
+            if issues:
+                log.warning(
+                    "editorial_repair_incomplete attempt=%d issues=%s",
+                    repair_attempt,
+                    sorted(issues),
+                )
+        if issues:
+            issue_names = ", ".join(sorted(issues))
+            raise InvalidAIResponseError(
+                "Текст Luna не прошёл редакционную проверку: " + issue_names,
             )
         return FilterResult(
             is_news=True,

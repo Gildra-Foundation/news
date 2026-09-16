@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from collections import OrderedDict
 
@@ -105,29 +106,83 @@ class AppServerClient:
         self._request_lock = asyncio.Lock()
 
     async def complete(self, system: str, user: str) -> str:
+        call_id = uuid.uuid4().hex[:12]
+        started_at = time.monotonic()
         async with self._request_lock:
-            return await self._complete_with_retries(system, user)
+            return await self._complete_with_retries(
+                system,
+                user,
+                call_id=call_id,
+                started_at=started_at,
+            )
 
-    async def _complete_with_retries(self, system: str, user: str) -> str:
+    async def _complete_with_retries(
+        self,
+        system: str,
+        user: str,
+        *,
+        call_id: str,
+        started_at: float,
+    ) -> str:
         for attempt in range(len(self._retry_delays) + 1):
             try:
-                return await self._complete_once(system, user)
+                result = await self._complete_once(
+                    system,
+                    user,
+                    call_id=call_id,
+                    attempt=attempt + 1,
+                )
             except AppServerError as exc:
                 if not exc.retryable or attempt >= len(self._retry_delays):
+                    log.error(
+                        "app_server_failed",
+                        extra={
+                            "call_id": call_id,
+                            "attempts": attempt + 1,
+                            "duration_ms": round(
+                                (time.monotonic() - started_at) * 1000,
+                            ),
+                            "retryable": exc.retryable,
+                            "error_type": type(exc).__name__,
+                        },
+                    )
                     raise
                 delay = self._retry_delays[attempt]
                 log.warning(
-                    "Temporary App Server failure; retrying in %.1fs (attempt %d/%d): %s",
-                    delay,
-                    attempt + 2,
-                    len(self._retry_delays) + 1,
-                    exc,
+                    "app_server_retry",
+                    extra={
+                        "call_id": call_id,
+                        "attempt": attempt + 1,
+                        "max_attempts": len(self._retry_delays) + 1,
+                        "delay_seconds": delay,
+                        "error_type": type(exc).__name__,
+                    },
                 )
                 await asyncio.sleep(delay)
+            else:
+                if attempt:
+                    log.warning(
+                        "app_server_recovered",
+                        extra={
+                            "call_id": call_id,
+                            "attempts": attempt + 1,
+                            "duration_ms": round(
+                                (time.monotonic() - started_at) * 1000,
+                            ),
+                        },
+                    )
+                return result
         raise AssertionError("unreachable")
 
-    async def _complete_once(self, system: str, user: str) -> str:
-        request_id = uuid.uuid4().hex
+    async def _complete_once(
+        self,
+        system: str,
+        user: str,
+        *,
+        call_id: str,
+        attempt: int,
+    ) -> str:
+        request_id = f"{call_id}-{attempt}-{uuid.uuid4().hex[:8]}"
         payload = {
             "threadId": f"gildranews-thread-{request_id}",
             "runId": f"gildranews-run-{request_id}",

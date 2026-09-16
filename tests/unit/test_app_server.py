@@ -134,6 +134,47 @@ async def test_client_retries_temporary_app_server_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_client_correlates_retry_and_recovery_logs(caplog: pytest.LogCaptureFixture) -> None:
+    attempts = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(503, text="busy")
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_event({"type": "TEXT_MESSAGE_CONTENT", "delta": "recovered"}),
+        )
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = AppServerClient(
+        endpoint="http://agent-codex:4202/ag-ui",
+        token="secret-token-must-not-be-logged",
+        http_client=http,
+        retry_delays=(0,),
+    )
+
+    with caplog.at_level("INFO", logger="gildranews.adapters.ai.app_server"):
+        assert await client.complete("secret system", "secret user") == "recovered"
+
+    retry = next(record for record in caplog.records if "app_server_retry" in record.message)
+    recovered = next(
+        record for record in caplog.records if "app_server_recovered" in record.message
+    )
+    assert retry.call_id == recovered.call_id
+    assert retry.attempt == 1
+    assert recovered.attempts == 2
+    assert recovered.duration_ms >= 0
+    assert "secret-token-must-not-be-logged" not in caplog.text
+    assert "secret system" not in caplog.text
+    assert "secret user" not in caplog.text
+
+    await http.aclose()
+
+
+@pytest.mark.asyncio
 async def test_client_does_not_retry_authentication_failure() -> None:
     attempts = 0
 
@@ -873,6 +914,41 @@ async def test_luna_repairs_ai_sounding_editorial_cliches_before_publication() -
 
     assert result is not None
     assert result.body == "Урон способности снизили на 20%, поэтому бой станет проще."
+
+
+@pytest.mark.asyncio
+async def test_luna_retries_editorial_repair_with_remaining_issues() -> None:
+    app_server = _SequenceAppServer(
+        [
+            {
+                "is_news": True,
+                "reason": "Изменились награды",
+                "title": "Blizzard изменила награды",
+                "body": "Важно отметить, что награды станут лучше.",
+                "hashtag": "новости",
+            },
+            {
+                "title": "Blizzard изменила награды",
+                "body": "Важно отметить, что награды станут лучше.",
+                "hashtag": "новости",
+                "references": [],
+            },
+            {
+                "title": "Blizzard улучшила награды",
+                "body": "Игроки будут получать более ценные награды.",
+                "hashtag": "новости",
+                "references": [],
+            },
+        ],
+    )
+
+    result = await AppServerContentAI(app_server).filter_and_rewrite(
+        "Blizzard improved the rewards.", [], [],
+    )
+
+    assert result is not None
+    assert result.title == "Blizzard улучшила награды"
+    assert result.body == "Игроки будут получать более ценные награды."
 
 
 @pytest.mark.asyncio
