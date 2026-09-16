@@ -63,6 +63,10 @@ _SPECIALIZATION_REFERENCE_ALIASES = {
     "frost mage": frozenset({"frost mage"}),
 }
 
+
+class InvalidAIResponseError(RuntimeError):
+    """The model responded, but its structured payload could not be validated."""
+
 _JSON_SUFFIX = """
 
 Верни только JSON без Markdown и пояснений. Допустимая структура:
@@ -370,12 +374,25 @@ class AppServerContentAI:
         self._editor = editor
 
     async def _complete(self, prompt: str, payload: dict[str, Any], schema: type[BaseModel]) -> BaseModel | None:
-        try:
-            raw = await self._app_server.complete(prompt, json.dumps(payload, ensure_ascii=False))
-            return schema.model_validate(_json_object(raw))
-        except (AppServerError, TypeError, ValueError, ValidationError):
-            log.warning("Luna returned an unavailable or invalid structured response", exc_info=True)
-            return None
+        serialized_payload = json.dumps(payload, ensure_ascii=False)
+        last_error: Exception | None = None
+        for attempt in range(2):
+            try:
+                raw = await self._app_server.complete(prompt, serialized_payload)
+                return schema.model_validate(_json_object(raw))
+            except AppServerError:
+                log.warning("Luna App Server request failed", exc_info=True)
+                raise
+            except (TypeError, ValueError, ValidationError) as exc:
+                last_error = exc
+                log.warning(
+                    "Luna returned an invalid structured response (attempt %d/2)",
+                    attempt + 1,
+                    exc_info=True,
+                )
+        raise InvalidAIResponseError(
+            "Luna дважды вернула ответ, который не прошёл проверку JSON",
+        ) from last_error
 
     async def _finish_rewrite(
         self,

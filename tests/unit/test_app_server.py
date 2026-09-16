@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
 import httpx
 import pytest
 
 from gildranews.adapters.ai.app_server import AppServerClient, AppServerError, parse_agui_sse
-from gildranews.adapters.ai.provider import AppServerContentAI
+from gildranews.adapters.ai.provider import AppServerContentAI, InvalidAIResponseError
 from gildranews.application.translation_qa import presentation_issues
 
 
@@ -70,6 +71,92 @@ async def test_client_sends_luna_model_and_internal_token_header() -> None:
     await http.aclose()
 
 
+@pytest.mark.asyncio
+async def test_client_serializes_concurrent_app_server_requests() -> None:
+    active = 0
+    max_active = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_event({"type": "TEXT_MESSAGE_CONTENT", "delta": "done"}),
+        )
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = AppServerClient(
+        endpoint="http://agent-codex:4202/ag-ui",
+        token="",
+        http_client=http,
+    )
+
+    assert await asyncio.gather(
+        client.complete("system", "first"),
+        client.complete("system", "second"),
+    ) == ["done", "done"]
+    assert max_active == 1
+
+    await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_client_retries_temporary_app_server_failure() -> None:
+    attempts = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(503, text="busy")
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_event({"type": "TEXT_MESSAGE_CONTENT", "delta": "recovered"}),
+        )
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = AppServerClient(
+        endpoint="http://agent-codex:4202/ag-ui",
+        token="",
+        http_client=http,
+        retry_delays=(0,),
+    )
+
+    assert await client.complete("system", "user") == "recovered"
+    assert attempts == 2
+
+    await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_client_does_not_retry_authentication_failure() -> None:
+    attempts = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(401, text="denied")
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = AppServerClient(
+        endpoint="http://agent-codex:4202/ag-ui",
+        token="bad-token",
+        http_client=http,
+        retry_delays=(0, 0),
+    )
+
+    with pytest.raises(AppServerError, match="HTTP 401"):
+        await client.complete("system", "user")
+    assert attempts == 1
+
+    await http.aclose()
+
+
 class _StubAppServer:
     def __init__(self, response: dict) -> None:
         self.response = response
@@ -118,6 +205,67 @@ class _SequenceAppServer(_StubAppServer):
                 "material_facts": [],
             }
         return json.dumps(response, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_luna_propagates_app_server_connectivity_failure() -> None:
+    class _UnavailableAppServer:
+        async def complete(self, system: str, user: str) -> str:
+            raise AppServerError("Не удалось связаться с App Server")
+
+        async def aclose(self) -> None:
+            return None
+
+    processor = AppServerContentAI(_UnavailableAppServer())
+
+    with pytest.raises(AppServerError, match="Не удалось связаться"):
+        await processor.filter_and_rewrite("News", [], [])
+
+
+@pytest.mark.asyncio
+async def test_luna_retries_invalid_structured_response_once() -> None:
+    class _InvalidThenValidAppServer:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def complete(self, system: str, user: str) -> str:
+            self.calls += 1
+            if self.calls == 1:
+                return "not json"
+            return json.dumps(
+                {
+                    "is_news": False,
+                    "reason": "Не относится к WoW",
+                    "title": "",
+                    "body": "",
+                },
+                ensure_ascii=False,
+            )
+
+        async def aclose(self) -> None:
+            return None
+
+    app_server = _InvalidThenValidAppServer()
+    result = await AppServerContentAI(app_server).filter_and_rewrite("News", [], [])
+
+    assert result is not None
+    assert result.is_news is False
+    assert app_server.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_luna_reports_invalid_json_after_both_attempts() -> None:
+    class _InvalidAppServer:
+        async def complete(self, system: str, user: str) -> str:
+            return "not json"
+
+        async def aclose(self) -> None:
+            return None
+
+    processor = AppServerContentAI(_InvalidAppServer())
+
+    with pytest.raises(InvalidAIResponseError, match="дважды.*JSON"):
+        await processor.filter_and_rewrite("News", [], [])
 
 
 @pytest.mark.asyncio
