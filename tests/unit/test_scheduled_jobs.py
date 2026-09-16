@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from gildranews.config import Config
+from gildranews.jobs import scheduler
 from gildranews.jobs.scheduler import ScheduledJobs, find_orphan_screenshots
 
 
@@ -51,8 +54,13 @@ def test_start_skips_telegram_pipeline_without_reader() -> None:
     jobs.start()
 
     assert "news_pipeline" not in scheduled
-    assert scheduled == ["rss_pipeline", "db_cleanup", "weekly_digest"]
-    assert startup == ["run_rss_pipeline", "cleanup"]
+    assert scheduled == [
+        "rss_pipeline",
+        "processing_retry",
+        "db_cleanup",
+        "weekly_digest",
+    ]
+    assert startup == ["retry_processing", "run_rss_pipeline", "cleanup"]
 
 
 def test_start_schedules_reddit_and_x_topics_morning_and_evening() -> None:
@@ -92,6 +100,41 @@ def test_start_schedules_reddit_and_x_topics_morning_and_evening() -> None:
     assert discovery_job["trigger"] == "cron"
     assert discovery_job["hour"] == "8,18"
     assert discovery_job["minute"] == 0
+
+
+def test_retry_and_maintenance_schedules_do_not_depend_on_poll_interval() -> None:
+    cfg = Config(
+        tg_api_id=0,
+        tg_api_hash="",
+        bot_token="token",
+        target_channel="@channel",
+        admin_user_id=1,
+        gemini_api_key="",
+        gemini_model="model",
+        lookback_minutes=45,
+        interval_minutes=0,
+        max_posts_per_run=3,
+    )
+    jobs = ScheduledJobs(None, object(), cfg, object(), object())
+    scheduled: list[str] = []
+
+    class FakeScheduler:
+        def add_job(self, _func, **kwargs) -> None:
+            scheduled.append(kwargs["id"])
+
+        def start(self) -> None:
+            scheduled.append("scheduler_started")
+
+    jobs._scheduler = FakeScheduler()
+    jobs._start_task = lambda coroutine: coroutine.close()
+
+    jobs.start()
+
+    assert "rss_pipeline" not in scheduled
+    assert "processing_retry" in scheduled
+    assert "db_cleanup" in scheduled
+    assert "weekly_digest" in scheduled
+    assert "scheduler_started" in scheduled
 
 
 def test_start_schedules_forever_guide_refresh_with_mtproto_publisher() -> None:
@@ -163,3 +206,65 @@ async def test_social_discovery_runs_reddit_then_x() -> None:
     await jobs.run_social_discovery()
 
     assert calls == ["reddit", "x"]
+
+
+@pytest.mark.asyncio
+async def test_rss_and_retry_pipelines_do_not_overlap(monkeypatch) -> None:
+    cfg = Config(
+        tg_api_id=0,
+        tg_api_hash="",
+        bot_token="token",
+        target_channel="@channel",
+        admin_user_id=1,
+        gemini_api_key="",
+        gemini_model="model",
+        lookback_minutes=45,
+        interval_minutes=30,
+        max_posts_per_run=3,
+    )
+    jobs = ScheduledJobs(None, object(), cfg, object(), object())
+    active = 0
+    max_active = 0
+
+    async def guarded_work(**_kwargs):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return {"due": 0}
+
+    monkeypatch.setattr(scheduler.process_rss, "run_once", guarded_work)
+    monkeypatch.setattr(scheduler.process_rss, "retry_due_items", guarded_work)
+
+    await asyncio.gather(jobs.run_rss_pipeline(), jobs.retry_processing())
+
+    assert max_active == 1
+
+
+@pytest.mark.asyncio
+async def test_startup_task_failure_is_retrieved_and_logged(caplog) -> None:
+    cfg = Config(
+        tg_api_id=0,
+        tg_api_hash="",
+        bot_token="token",
+        target_channel="@channel",
+        admin_user_id=1,
+        gemini_api_key="",
+        gemini_model="model",
+        lookback_minutes=45,
+        interval_minutes=30,
+        max_posts_per_run=3,
+    )
+    jobs = ScheduledJobs(None, object(), cfg, object(), object())
+
+    async def failing_startup_job() -> None:
+        raise RuntimeError("startup failed")
+
+    with caplog.at_level("ERROR", logger="gildranews.jobs.scheduler"):
+        jobs._start_task(failing_startup_job())
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    assert "Startup job failed" in caplog.text
+    assert not jobs._startup_tasks

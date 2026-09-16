@@ -61,44 +61,60 @@ class ScheduledJobs:
         self._publisher_client = publisher_client
         self._scheduler = AsyncIOScheduler(timezone="UTC")
         self._startup_tasks: set[asyncio.Task] = set()
+        self._pipeline_lock = asyncio.Lock()
 
     async def run_pipeline(self) -> None:
         if self._client is None:
             return
         from gildranews.application import process_news
 
-        await process_news.run_once(
-            self._client,
-            self._bot,
-            self._cfg,
-            on_result=self._on_result,
-            news_filter=self._content_ai,
-        )
+        async with self._pipeline_lock:
+            await process_news.run_once(
+                self._client,
+                self._bot,
+                self._cfg,
+                on_result=self._on_result,
+                news_filter=self._content_ai,
+            )
 
     async def run_rss_pipeline(self) -> None:
-        await process_rss.run_once(
-            bot=self._bot,
-            cfg=self._cfg,
-            content_ai=self._content_ai,
-            on_result=self._on_result,
-        )
+        async with self._pipeline_lock:
+            await process_rss.run_once(
+                bot=self._bot,
+                cfg=self._cfg,
+                content_ai=self._content_ai,
+                on_result=self._on_result,
+            )
+
+    async def retry_processing(self) -> None:
+        async with self._pipeline_lock:
+            result = await process_rss.retry_due_items(
+                bot=self._bot,
+                cfg=self._cfg,
+                content_ai=self._content_ai,
+                on_result=self._on_result,
+            )
+        if result["due"]:
+            log.info("Processing retry queue: %s", result)
 
     async def run_reddit_pipeline(self) -> None:
-        result = await process_reddit.run_once(
-            bot=self._bot,
-            cfg=self._cfg,
-            content_ai=self._content_ai,
-            on_result=self._on_result,
-        )
+        async with self._pipeline_lock:
+            result = await process_reddit.run_once(
+                bot=self._bot,
+                cfg=self._cfg,
+                content_ai=self._content_ai,
+                on_result=self._on_result,
+            )
         log.info("Daily Reddit topics: %s", result)
 
     async def run_x_pipeline(self) -> None:
-        result = await process_x.run_once(
-            bot=self._bot,
-            cfg=self._cfg,
-            content_ai=self._content_ai,
-            on_result=self._on_result,
-        )
+        async with self._pipeline_lock:
+            result = await process_x.run_once(
+                bot=self._bot,
+                cfg=self._cfg,
+                content_ai=self._content_ai,
+                on_result=self._on_result,
+            )
         log.info("Scheduled X topics: %s", result)
 
     async def run_social_discovery(self) -> None:
@@ -137,11 +153,12 @@ class ScheduledJobs:
             stats = await db.cleanup_old_data()
             if any(stats.values()):
                 log.info(
-                    "DB cleanup: drafts=%d seen=%d runs=%d published=%d",
+                    "DB cleanup: drafts=%d seen=%d runs=%d published=%d retries=%d",
                     stats["drafts"],
                     stats["seen"],
                     stats["runs"],
                     stats["published"],
+                    stats["retries"],
                 )
 
             active_draft_ids = set(await db.list_draft_ids())
@@ -171,87 +188,88 @@ class ScheduledJobs:
             log.exception("scheduled digest failed")
 
     def start(self) -> None:
-        if self._cfg.interval_minutes > 0:
-            if self._cfg.rss_enabled:
-                self._scheduler.add_job(
-                    self.run_rss_pipeline,
-                    trigger="interval",
-                    minutes=self._cfg.interval_minutes,
-                    id="rss_pipeline",
-                    max_instances=1,
-                    coalesce=True,
-                )
-            if self._client is not None:
-                self._scheduler.add_job(
-                    self.run_pipeline,
-                    trigger="interval",
-                    minutes=self._cfg.interval_minutes,
-                    id="news_pipeline",
-                    max_instances=1,
-                    coalesce=True,
-                )
+        if self._cfg.interval_minutes > 0 and self._cfg.rss_enabled:
             self._scheduler.add_job(
-                self.cleanup,
+                self.run_rss_pipeline,
                 trigger="interval",
-                hours=24,
-                id="db_cleanup",
+                minutes=self._cfg.interval_minutes,
+                id="rss_pipeline",
                 max_instances=1,
                 coalesce=True,
             )
+        self._scheduler.add_job(
+            self.retry_processing,
+            trigger="interval",
+            minutes=5,
+            id="processing_retry",
+            max_instances=1,
+            coalesce=True,
+        )
+        if self._cfg.interval_minutes > 0 and self._client is not None:
             self._scheduler.add_job(
-                self.publish_digest,
-                trigger="cron",
-                day_of_week="sun",
-                hour=18,
-                minute=0,
-                id="weekly_digest",
+                self.run_pipeline,
+                trigger="interval",
+                minutes=self._cfg.interval_minutes,
+                id="news_pipeline",
                 max_instances=1,
                 coalesce=True,
             )
-            if self._cfg.reddit_enabled or self._cfg.x_enabled:
-                self._scheduler.add_job(
-                    self.run_social_discovery,
-                    trigger="cron",
-                    hour=",".join(map(str, self._cfg.social_discovery_hours_utc)),
-                    minute=0,
-                    id="social_discovery",
-                    max_instances=1,
-                    coalesce=True,
-                )
-            if self._cfg.emoji_autocreate_enabled:
-                self._scheduler.add_job(
-                    self.retry_custom_emojis,
-                    trigger="interval",
-                    minutes=5,
-                    id="custom_emoji_retry",
-                    max_instances=1,
-                    coalesce=True,
-                )
-            if (
-                self._publisher_client is not None
-                and self._cfg.forever_guide_message_id > 0
-            ):
-                self._scheduler.add_job(
-                    self.refresh_forever_guide,
-                    trigger="interval",
-                    minutes=self._cfg.forever_guide_refresh_minutes,
-                    id="forever_guide_refresh",
-                    max_instances=1,
-                    coalesce=True,
-                )
-            self._scheduler.start()
-            if self._client is not None:
-                log.info(
-                    "Safety-net поллинг каждые %d мин, cleanup раз в сутки, "
-                    "дайджест по воскресеньям 18:00 UTC",
-                    self._cfg.interval_minutes,
-                )
-            elif not self._cfg.rss_enabled:
-                log.info(
-                    "Telegram-reader отключён; cleanup раз в сутки, "
-                    "дайджест по воскресеньям 18:00 UTC",
-                )
+        self._scheduler.add_job(
+            self.cleanup,
+            trigger="interval",
+            hours=24,
+            id="db_cleanup",
+            max_instances=1,
+            coalesce=True,
+        )
+        self._scheduler.add_job(
+            self.publish_digest,
+            trigger="cron",
+            day_of_week="sun",
+            hour=18,
+            minute=0,
+            id="weekly_digest",
+            max_instances=1,
+            coalesce=True,
+        )
+        if self._cfg.reddit_enabled or self._cfg.x_enabled:
+            self._scheduler.add_job(
+                self.run_social_discovery,
+                trigger="cron",
+                hour=",".join(map(str, self._cfg.social_discovery_hours_utc)),
+                minute=0,
+                id="social_discovery",
+                max_instances=1,
+                coalesce=True,
+            )
+        if self._cfg.emoji_autocreate_enabled:
+            self._scheduler.add_job(
+                self.retry_custom_emojis,
+                trigger="interval",
+                minutes=5,
+                id="custom_emoji_retry",
+                max_instances=1,
+                coalesce=True,
+            )
+        if (
+            self._publisher_client is not None
+            and self._cfg.forever_guide_message_id > 0
+        ):
+            self._scheduler.add_job(
+                self.refresh_forever_guide,
+                trigger="interval",
+                minutes=self._cfg.forever_guide_refresh_minutes,
+                id="forever_guide_refresh",
+                max_instances=1,
+                coalesce=True,
+            )
+        self._scheduler.start()
+        log.info(
+            "Processing retries every 5 minutes; cleanup daily; "
+            "digest Sunday 18:00 UTC",
+        )
 
+        self._start_task(self.retry_processing())
         if self._cfg.rss_enabled:
             self._start_task(self.run_rss_pipeline())
         if self._client is not None:
@@ -265,7 +283,18 @@ class ScheduledJobs:
     def _start_task(self, coroutine) -> None:
         task = asyncio.create_task(coroutine)
         self._startup_tasks.add(task)
-        task.add_done_callback(self._startup_tasks.discard)
+        task.add_done_callback(self._startup_task_done)
+
+    def _startup_task_done(self, task: asyncio.Task) -> None:
+        self._startup_tasks.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            log.error(
+                "Startup job failed",
+                exc_info=(type(error), error, error.__traceback__),
+            )
 
     async def stop(self) -> None:
         if self._scheduler.running:

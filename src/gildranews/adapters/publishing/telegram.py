@@ -15,6 +15,7 @@ from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo, Message
 from telethon import TelegramClient
 from telethon.errors import RPCError
 
+from gildranews.adapters.persistence import processing_retries as retry_store
 from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.publishing import mtproto
 from gildranews.adapters.publishing.rich_message import (
@@ -144,11 +145,14 @@ def make_dispatcher(admin_id: int, target_channel: str) -> Dispatcher:
         if not run:
             await message.answer("Прогонов ещё не было.")
             return
+        retries = await retry_store.counts()
         lines = [
             f"Последний прогон: {run['finished_at'] or run['started_at']}",
             f"Получено: {run['fetched']}",
             f"Отобрано ИИ: {run['selected']}",
             f"Опубликовано: {run['published']}",
+            f"Очередь повторов: {retries['pending']}",
+            f"Остановлено после ошибок: {retries['failed']}",
         ]
         if run["error"]:
             lines.append(f"Ошибка: {run['error']}")
