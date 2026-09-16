@@ -118,6 +118,26 @@ CREATE TABLE IF NOT EXISTS service_state (
     detail TEXT NOT NULL DEFAULT '',
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS processing_retries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    external_id INTEGER NOT NULL,
+    payload_json TEXT NOT NULL,
+    content_kind TEXT NOT NULL DEFAULT 'news',
+    quota_source TEXT,
+    quota_day TEXT,
+    quota_limit INTEGER,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 1,
+    next_retry_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(source, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_processing_retries_due
+    ON processing_retries(status, next_retry_at);
 CREATE TABLE IF NOT EXISTS drafts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_url TEXT,
@@ -926,6 +946,12 @@ async def cleanup_old_data() -> dict:
         "DELETE FROM published_posts WHERE posted_at < datetime('now', '-30 days')"
     )
     published_removed = cur.rowcount
+    cur = await db.execute(
+        """DELETE FROM processing_retries
+           WHERE (status='failed' AND updated_at < datetime('now', '-7 days'))
+              OR expires_at < unixepoch('now', '-7 days')"""
+    )
+    retries_removed = cur.rowcount
     await db.commit()
     # Освободившиеся страницы переиспользует SQLite. VACUUM здесь небезопасен:
     # другая корутина может открыть транзакцию на общем соединении после commit.
@@ -935,4 +961,5 @@ async def cleanup_old_data() -> dict:
         "seen": seen_removed,
         "runs": runs_removed,
         "published": published_removed,
+        "retries": retries_removed,
     }

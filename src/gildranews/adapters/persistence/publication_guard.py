@@ -161,33 +161,37 @@ async def complete_publication(
         return
     db = await sqlite._get_conn()
     async with _lock:
-        await db.execute("BEGIN IMMEDIATE")
-        async with db.execute(
-            """SELECT story_key, revision_key, fingerprint_json
-               FROM publication_candidates WHERE id=? AND status='reserved'""",
-            (reservation_id,),
-        ) as cursor:
-            row = await cursor.fetchone()
-        if row is None:
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            async with db.execute(
+                """SELECT story_key, revision_key, fingerprint_json
+                   FROM publication_candidates WHERE id=? AND status='reserved'""",
+                (reservation_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+            if row is None:
+                raise RuntimeError("Резерв публикации не найден")
+            await db.execute(
+                """INSERT INTO published_posts(
+                       channel, message_id, title, body, target_message_id,
+                       story_key, revision_key, fingerprint_json
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    sqlite._normalize(channel), message_id, title, body,
+                    target_message_id, row[0], row[1], row[2],
+                ),
+            )
+            await db.execute(
+                """UPDATE publication_candidates
+                   SET status='published', target_message_id=?,
+                       updated_at=CURRENT_TIMESTAMP
+                   WHERE id=?""",
+                (target_message_id, reservation_id),
+            )
+            await db.commit()
+        except Exception:
             await db.rollback()
-            raise RuntimeError("Резерв публикации не найден")
-        await db.execute(
-            """INSERT INTO published_posts(
-                   channel, message_id, title, body, target_message_id,
-                   story_key, revision_key, fingerprint_json
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                sqlite._normalize(channel), message_id, title, body,
-                target_message_id, row[0], row[1], row[2],
-            ),
-        )
-        await db.execute(
-            """UPDATE publication_candidates
-               SET status='published', target_message_id=?, updated_at=CURRENT_TIMESTAMP
-               WHERE id=?""",
-            (target_message_id, reservation_id),
-        )
-        await db.commit()
+            raise
 
 
 async def fail_publication(reservation_id: int | None, failure: str) -> None:
@@ -195,28 +199,33 @@ async def fail_publication(reservation_id: int | None, failure: str) -> None:
         return
     db = await sqlite._get_conn()
     async with _lock:
-        await db.execute("BEGIN IMMEDIATE")
-        async with db.execute(
-            """SELECT quota_source, quota_day FROM publication_candidates
-               WHERE id=? AND status='reserved'""",
-            (reservation_id,),
-        ) as cursor:
-            row = await cursor.fetchone()
-        if row is not None:
-            await db.execute(
-                """UPDATE publication_candidates SET status='failed', failure=?,
-                       updated_at=CURRENT_TIMESTAMP WHERE id=?""",
-                (failure[:500], reservation_id),
-            )
-            if row[0] and row[1]:
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            async with db.execute(
+                """SELECT quota_source, quota_day FROM publication_candidates
+                   WHERE id=? AND status='reserved'""",
+                (reservation_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+            if row is not None:
                 await db.execute(
-                    """UPDATE daily_source_usage
-                       SET publication_count=MAX(0, publication_count - 1),
-                           updated_at=CURRENT_TIMESTAMP
-                       WHERE source=? AND day_utc=?""",
-                    (row[0], row[1]),
+                    """UPDATE publication_candidates
+                       SET status='failed', failure=?, updated_at=CURRENT_TIMESTAMP
+                       WHERE id=?""",
+                    (failure[:500], reservation_id),
                 )
-        await db.commit()
+                if row[0] and row[1]:
+                    await db.execute(
+                        """UPDATE daily_source_usage
+                           SET publication_count=MAX(0, publication_count - 1),
+                               updated_at=CURRENT_TIMESTAMP
+                           WHERE source=? AND day_utc=?""",
+                        (row[0], row[1]),
+                    )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
 
 
 async def daily_publication_count(source: str, day_utc: date) -> int:

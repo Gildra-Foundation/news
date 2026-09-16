@@ -41,4 +41,5 @@ async def test_cleanup_does_not_vacuum_shared_live_connection(monkeypatch) -> No
         "seen": 1,
         "runs": 1,
         "published": 1,
+        "retries": 1,
     }

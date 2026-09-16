@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import date
 
+import aiosqlite
 import pytest
 
 from gildranews.adapters.persistence import publication_guard, sqlite
@@ -168,5 +169,43 @@ async def test_stale_reservation_releases_story_and_daily_slot(monkeypatch, tmp_
 
         assert replacement.reserved
         assert await publication_guard.daily_publication_count("x", day) == 1
+    finally:
+        await sqlite.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_publication_completion_rolls_back_transaction(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    await sqlite.close()
+    monkeypatch.setattr(sqlite, "DB_PATH", str(tmp_path / "newsbot.db"))
+    await sqlite.init()
+    try:
+        reservation = await publication_guard.reserve_publication(
+            "wowhead",
+            303,
+            _fingerprint(),
+        )
+        assert reservation.reserved
+        db = await sqlite._get_conn()
+        await db.execute(
+            """CREATE TRIGGER reject_published_post
+               BEFORE INSERT ON published_posts
+               BEGIN SELECT RAISE(ABORT, 'forced test failure'); END""",
+        )
+        await db.commit()
+
+        with pytest.raises(aiosqlite.DatabaseError, match="forced test failure"):
+            await publication_guard.complete_publication(
+                reservation.reservation_id,
+                channel="wowhead",
+                message_id=303,
+                title="Пост",
+                body="Текст",
+                target_message_id=55,
+            )
+
+        assert not db.in_transaction
     finally:
         await sqlite.close()
