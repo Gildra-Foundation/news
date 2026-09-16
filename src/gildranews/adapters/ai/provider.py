@@ -448,16 +448,20 @@ class AppServerContentAI:
             _FilterOutput,
         )
         if not isinstance(output, _FilterOutput):
-            return None
+            raise InvalidAIResponseError("Luna не вернула результат анализа новости")
         if not output.is_news:
             return FilterResult(is_news=False, reason=output.reason.strip())
         fingerprint = _event_fingerprint(output.fingerprint)
         if fingerprint is None:
             log.warning("Luna accepted a story without a valid event fingerprint")
-            return None
+            raise InvalidAIResponseError(
+                "Luna не вернула обязательный отпечаток события",
+            )
         rewrite = await self._finish_rewrite(text, output)
         if rewrite is None:
-            return None
+            raise InvalidAIResponseError(
+                "Текст Luna не прошёл проверку сохранности фактов",
+            )
         public_text = f"{rewrite.title}\n{rewrite.body}"
         terms = untranslated_terms(public_text)
         style_markers = artificial_style_markers(public_text)
@@ -497,7 +501,9 @@ class AppServerContentAI:
                 _RewriteOutput,
             )
             if not isinstance(repaired_output, _RewriteOutput):
-                return None
+                raise InvalidAIResponseError(
+                    "Luna не вернула исправленный редакторский текст",
+                )
             repaired = await self._finish_rewrite(
                 f"{rewrite.title}\n\n{rewrite.body}",
                 repaired_output,
@@ -530,7 +536,9 @@ class AppServerContentAI:
                 or _combat_reference_issues(text, repaired_references)
             ):
                 log.warning("Editorial repair did not pass language and style gates")
-                return None
+                raise InvalidAIResponseError(
+                    "Текст Luna не прошёл редакционную проверку после исправления",
+                )
             rewrite = Rewrite(
                 title=repaired.title,
                 body=repaired.body,

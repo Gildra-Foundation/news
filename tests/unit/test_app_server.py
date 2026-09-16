@@ -354,11 +354,10 @@ async def test_luna_rejects_accepted_news_without_event_fingerprint() -> None:
         async def aclose(self) -> None:
             return None
 
-    result = await AppServerContentAI(_RawStub()).filter_and_rewrite(
-        "The raid boss will be nerfed", [], [],
-    )
-
-    assert result is None
+    with pytest.raises(InvalidAIResponseError, match="отпечаток события"):
+        await AppServerContentAI(_RawStub()).filter_and_rewrite(
+            "The raid boss will be nerfed", [], [],
+        )
 
 
 @pytest.mark.asyncio
@@ -749,9 +748,8 @@ async def test_luna_rejects_named_raid_when_reference_query_is_invented() -> Non
         ),
     )
 
-    result = await processor.filter_and_rewrite("Venomous Abyss raid tuning", [], [])
-
-    assert result is None
+    with pytest.raises(InvalidAIResponseError, match="редакционную проверку"):
+        await processor.filter_and_rewrite("Venomous Abyss raid tuning", [], [])
 
 
 @pytest.mark.asyncio

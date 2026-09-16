@@ -351,6 +351,7 @@ def check_translation(source: str, translated: str) -> TranslationQA:
     """Mechanical fidelity checks adapted from Manacost TranslateTeam."""
     source_numbers = _NUMBER_RE.findall(source)
     target_numbers = _NUMBER_RE.findall(translated)
+    target_number_set = set(target_numbers)
     source_links = _LINK_RE.findall(source)
     target_links = _LINK_RE.findall(translated)
     def missing(source_values: list[str], target_values: list[str]) -> tuple[str, ...]:
@@ -364,7 +365,11 @@ def check_translation(source: str, translated: str) -> TranslationQA:
         return tuple(result)
 
     return TranslationQA(
-        missing_numbers=missing(source_numbers, target_numbers),
+        missing_numbers=tuple(
+            value
+            for value in dict.fromkeys(source_numbers)
+            if value not in target_number_set
+        ),
         missing_links=missing(source_links, target_links),
         code_spans_match=len(_CODE_RE.findall(source)) == len(_CODE_RE.findall(translated)),
         untranslated_terms=untranslated_terms(translated),

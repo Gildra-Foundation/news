@@ -1,5 +1,6 @@
 from gildranews.application.translation_qa import (
     artificial_style_markers,
+    check_translation,
     normalize_wow_class_terms,
     normalize_wow_expansion_names,
     normalize_wow_ptr_terms,
@@ -8,6 +9,16 @@ from gildranews.application.translation_qa import (
     specialization_issues,
     untranslated_terms,
 )
+
+
+def test_translation_qa_allows_a_repeated_number_to_be_deduplicated() -> None:
+    source = (
+        "Новые задания начнутся с 5-го уровня\n\n"
+        "Новые задания появятся уже с 5-го уровня."
+    )
+    translated = "Новые задания появятся уже с 5-го уровня."
+
+    assert check_translation(source, translated).missing_numbers == ()
 
 
 def test_untranslated_terms_detects_raid_and_ability_names() -> None:
