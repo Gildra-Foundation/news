@@ -43,6 +43,55 @@ async def test_same_story_from_two_sources_gets_one_atomic_reservation(
 
 
 @pytest.mark.asyncio
+async def test_paraphrased_story_with_different_key_is_blocked(
+    monkeypatch, tmp_path,
+) -> None:
+    await sqlite.close()
+    monkeypatch.setattr(sqlite, "DB_PATH", str(tmp_path / "newsbot.db"))
+    await sqlite.init()
+    previous = EventFingerprint(
+        game_branch="retail",
+        version="",
+        subject="призрачные фиксации на Извивающемся алтаре",
+        action="включить танков в третью волну",
+        status="live",
+        effective_date="",
+        material_facts=("Танки всегда получают фиксацию в третьей волне",),
+    )
+    paraphrase = EventFingerprint(
+        game_branch="retail",
+        version="12.1",
+        subject="Неприятная фиксация на Извивающемся алтаре",
+        action="исправить выбор танков",
+        status="live",
+        effective_date="2026-09-17",
+        material_facts=(
+            "Неприятная фиксация выбирала танков чаще, чем предусмотрено",
+        ),
+    )
+    try:
+        first = await publication_guard.reserve_publication("wowhead", 101, previous)
+        assert first.reserved
+        await publication_guard.complete_publication(
+            first.reservation_id,
+            channel="wowhead",
+            message_id=101,
+            title="Первый пост",
+            body="Текст",
+            target_message_id=64,
+        )
+
+        duplicate = await publication_guard.reserve_publication(
+            "icy-veins", 202, paraphrase,
+        )
+
+        assert duplicate.reserved is False
+        assert duplicate.reason == "Тот же сюжет уже зарезервирован или опубликован"
+    finally:
+        await sqlite.close()
+
+
+@pytest.mark.asyncio
 async def test_material_story_update_is_allowed(monkeypatch, tmp_path) -> None:
     await sqlite.close()
     monkeypatch.setattr(sqlite, "DB_PATH", str(tmp_path / "newsbot.db"))

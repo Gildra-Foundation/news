@@ -77,10 +77,10 @@ async def reserve_publication(
             await _recover_stale_reservations(db)
             async with db.execute(
                 """SELECT fingerprint_json FROM publication_candidates
-                   WHERE story_key=? AND status IN ('reserved', 'published')
+                   WHERE status IN ('reserved', 'published')
                      AND created_at >= datetime('now', ?)
                    ORDER BY id DESC""",
-                (fingerprint.story_key, f"-{max(1, lookback_days)} days"),
+                (f"-{max(1, lookback_days)} days",),
             ) as cursor:
                 previous_rows = await cursor.fetchall()
             for row in previous_rows:
