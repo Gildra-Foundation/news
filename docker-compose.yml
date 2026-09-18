@@ -14,6 +14,12 @@ services:
       - ./data:/app/data
     stop_grace_period: 15s
     init: true
+    healthcheck:
+      test: ["CMD", "python", "-m", "gildranews.healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     # Жёсткий потолок чтобы при сбое/утечке не съел всю машину
     mem_limit: 512m
     mem_reservation: 128m
