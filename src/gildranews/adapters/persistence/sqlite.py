@@ -482,6 +482,33 @@ async def record_news_selector_decision(record: SelectionAuditRecord) -> None:
     await db.commit()
 
 
+async def news_selector_summary(hours: int = 24) -> dict[str, int | float | str]:
+    db = await _get_conn()
+    bounded_hours = max(1, min(hours, 24 * 30))
+    async with db.execute(
+        """SELECT COUNT(*),
+                  COALESCE(SUM(decision = 'accept'), 0),
+                  COALESCE(SUM(decision = 'reject'), 0),
+                  COALESCE(SUM(decision = 'error'), 0),
+                  COALESCE(SUM(json_extract(detail_json, '$.blocked') = 1), 0),
+                  COALESCE(SUM(cost), 0),
+                  COALESCE(MAX(created_at), '')
+           FROM ai_decisions
+           WHERE created_at >= datetime('now', ?)""",
+        (f"-{bounded_hours} hours",),
+    ) as cursor:
+        row = await cursor.fetchone()
+    return {
+        "total": int(row[0]),
+        "accepted": int(row[1]),
+        "rejected": int(row[2]),
+        "errors": int(row[3]),
+        "blocked": int(row[4]),
+        "cost": float(row[5]),
+        "last_decision_at": str(row[6]),
+    }
+
+
 # ---------- Published / dedup ----------
 async def was_published(channel: str, message_id: int) -> str | None:
     db = await _get_conn()

@@ -113,5 +113,17 @@ async def test_selector_decision_is_persisted_without_source_text(monkeypatch, t
         )
         assert '"blocked": true' in row[4]
         assert "source text" not in row[4]
+
+        summary = await sqlite.news_selector_summary(hours=24)
+        assert summary == {
+            "total": 1,
+            "accepted": 0,
+            "rejected": 1,
+            "errors": 0,
+            "blocked": 1,
+            "cost": pytest.approx(0.00001),
+            "last_decision_at": summary["last_decision_at"],
+        }
+        assert summary["last_decision_at"]
     finally:
         await sqlite.close()

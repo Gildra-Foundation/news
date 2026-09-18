@@ -146,6 +146,7 @@ def make_dispatcher(admin_id: int, target_channel: str) -> Dispatcher:
             await message.answer("Прогонов ещё не было.")
             return
         retries = await retry_store.counts()
+        selector = await db.news_selector_summary(hours=24)
         lines = [
             f"Последний прогон: {run['finished_at'] or run['started_at']}",
             f"Получено: {run['fetched']}",
@@ -154,6 +155,20 @@ def make_dispatcher(admin_id: int, target_channel: str) -> Dispatcher:
             f"Очередь повторов: {retries['pending']}",
             f"Остановлено после ошибок: {retries['failed']}",
         ]
+        if selector["total"]:
+            lines.extend(
+                [
+                    (
+                        "TypeSafe за 24 часа: "
+                        f"{selector['total']} решений, {selector['blocked']} заблокировано"
+                    ),
+                    (
+                        f"Отбор: {selector['accepted']} принято, "
+                        f"{selector['rejected']} отклонено, {selector['errors']} ошибок"
+                    ),
+                    f"Стоимость отбора: ${selector['cost']:.6f}",
+                ]
+            )
         if run["error"]:
             lines.append(f"Ошибка: {run['error']}")
         await message.answer("\n".join(lines))
