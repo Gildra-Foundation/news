@@ -31,6 +31,7 @@ dev = [
 [project.scripts]
 gildranews = "gildranews.__main__:run"
 gildranews-api-keys = "gildranews.configure_keys:main"
+gildranews-eval = "gildranews.application.editorial_eval:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
