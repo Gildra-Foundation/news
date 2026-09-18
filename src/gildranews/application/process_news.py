@@ -114,7 +114,10 @@ async def process_post(
     emoji_themes = emoji_store.themes_for_prompt(emoji_map)
 
     try:
-        processor = news_filter or build_content_ai(cfg)
+        processor = news_filter or build_content_ai(
+            cfg,
+            selector_audit=db.record_news_selector_decision,
+        )
         filt = await processor.filter_and_rewrite(
             text=post.text,
             recent_posts=recent_posts,

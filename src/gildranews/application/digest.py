@@ -82,7 +82,10 @@ async def build_and_publish(
             "body_excerpt": (p["body"] or "")[:400],
         })
 
-    processor = content_ai or build_content_ai(cfg)
+    processor = content_ai or build_content_ai(
+        cfg,
+        selector_audit=db.record_news_selector_decision,
+    )
     digest = await processor.make_weekly_digest(ai_input)
     if digest is None or not digest.sections:
         return {"published": False, "reason": "AI-сервис не вернул дайджест"}

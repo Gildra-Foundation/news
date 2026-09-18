@@ -164,11 +164,17 @@ async def test_openrouter_selector_uses_decisions_endpoint_and_parses_answers() 
 async def test_confident_rejection_stops_before_luna() -> None:
     selector = _StubSelector(_decision(choice="reject", confidence=0.98))
     delegate = _StubContentAI()
+    audits = []
+
+    async def record_audit(audit) -> None:
+        audits.append(audit)
+
     content_ai = ClassifiedContentAI(
         delegate,
         selector,
         min_reject_confidence=0.8,
         shadow_mode=False,
+        audit_recorder=record_audit,
     )
 
     result = await content_ai.filter_and_rewrite("candidate", [], [])
@@ -177,6 +183,13 @@ async def test_confident_rejection_stops_before_luna() -> None:
     assert result.is_news is False
     assert "TypeSafe" in result.reason
     assert delegate.filter_calls == 0
+    assert len(audits) == 1
+    assert audits[0].choice == "reject"
+    assert audits[0].blocked is True
+    assert audits[0].content_sha256 == (
+        "dda18a0e21ae47c53b4309434cbc02ae8bf764fa83a6defbb719431242722aa7"
+    )
+    assert audits[0].prompt_version == "typesafe-selection-v1"
 
 
 @pytest.mark.asyncio

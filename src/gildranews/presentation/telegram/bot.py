@@ -75,7 +75,7 @@ async def run_bot() -> None:
 
     bot = tg_writer.make_bot(cfg.bot_token)
     dp = tg_writer.make_dispatcher(cfg.admin_user_id, cfg.target_channel)
-    content_ai = build_content_ai(cfg)
+    content_ai = build_content_ai(cfg, selector_audit=db.record_news_selector_decision)
     _notify_admin = partial(notify_admin, bot, cfg)
 
     mtproto_client = None

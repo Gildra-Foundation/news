@@ -10,7 +10,11 @@ from pydantic import BaseModel, Field, ValidationError
 
 from gildranews.adapters.ai import gemini
 from gildranews.adapters.ai.app_server import AppServerClient, AppServerError
-from gildranews.adapters.ai.news_selector import ClassifiedContentAI, OpenRouterNewsSelector
+from gildranews.adapters.ai.news_selector import (
+    ClassifiedContentAI,
+    OpenRouterNewsSelector,
+    SelectionAuditRecorder,
+)
 from gildranews.adapters.ai.prompts import WOW_CLASS_TERMINOLOGY
 from gildranews.adapters.editor.manacost import EditorClient
 from gildranews.application.translation_qa import (
@@ -697,7 +701,11 @@ class GeminiContentAI:
         return None
 
 
-def build_content_ai(cfg: Config):
+def build_content_ai(
+    cfg: Config,
+    *,
+    selector_audit: SelectionAuditRecorder | None = None,
+):
     if cfg.ai_provider == "gemini":
         content_ai = GeminiContentAI(cfg.gemini_api_key, cfg.gemini_model)
     else:
@@ -729,4 +737,5 @@ def build_content_ai(cfg: Config):
         ),
         min_reject_confidence=cfg.news_selector_min_reject_confidence,
         shadow_mode=cfg.news_selector_shadow_mode,
+        audit_recorder=selector_audit,
     )

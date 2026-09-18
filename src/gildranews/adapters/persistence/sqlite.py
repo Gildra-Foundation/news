@@ -4,8 +4,12 @@ import asyncio
 import json
 import logging
 from collections.abc import Iterable, Sequence
+from typing import TYPE_CHECKING
 
 import aiosqlite
+
+if TYPE_CHECKING:
+    from gildranews.adapters.ai.news_selector import SelectionAuditRecord
 
 from gildranews.domain.models import (
     MAX_ENTITY_EMOJIS_PER_POST,
@@ -43,6 +47,23 @@ CREATE TABLE IF NOT EXISTS runs (
     published INTEGER,
     error TEXT
 );
+CREATE TABLE IF NOT EXISTS ai_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content_sha256 TEXT NOT NULL,
+    content_kind TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0,
+    branch TEXT NOT NULL DEFAULT 'unknown',
+    information_status TEXT NOT NULL DEFAULT 'unknown',
+    model TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    cost REAL NOT NULL DEFAULT 0,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_ai_decisions_content
+    ON ai_decisions(content_sha256, created_at);
 CREATE TABLE IF NOT EXISTS published_posts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     channel TEXT NOT NULL,
@@ -276,7 +297,34 @@ async def _migration_1(db: aiosqlite.Connection) -> None:
     )
 
 
-_MIGRATIONS = ((1, "legacy_columns_and_source_quotas", _migration_1),)
+async def _migration_2(db: aiosqlite.Connection) -> None:
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS ai_decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content_sha256 TEXT NOT NULL,
+            content_kind TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            confidence REAL NOT NULL DEFAULT 0,
+            branch TEXT NOT NULL DEFAULT 'unknown',
+            information_status TEXT NOT NULL DEFAULT 'unknown',
+            model TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            cost REAL NOT NULL DEFAULT 0,
+            detail_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )"""
+    )
+    await db.execute(
+        """CREATE INDEX IF NOT EXISTS idx_ai_decisions_content
+           ON ai_decisions(content_sha256, created_at)"""
+    )
+
+
+_MIGRATIONS = (
+    (1, "legacy_columns_and_source_quotas", _migration_1),
+    (2, "ai_decision_audit", _migration_2),
+)
 MIGRATION_IDENTITIES = tuple((version, name) for version, name, _ in _MIGRATIONS)
 CURRENT_SCHEMA_VERSION = max(version for version, _, _ in _MIGRATIONS)
 
@@ -400,6 +448,38 @@ async def last_run() -> dict | None:
         return None
     keys = ["started_at", "finished_at", "fetched", "selected", "published", "error"]
     return dict(zip(keys, row))
+
+
+async def record_news_selector_decision(record: SelectionAuditRecord) -> None:
+    db = await _get_conn()
+    detail = {
+        "probabilities": record.probabilities,
+        "wow_relevance": record.wow_relevance,
+        "has_substance": record.has_substance,
+        "threshold": record.threshold,
+        "shadow_mode": record.shadow_mode,
+        "blocked": record.blocked,
+        "error": record.error,
+    }
+    await db.execute(
+        """INSERT INTO ai_decisions(
+               content_sha256, content_kind, stage, decision, confidence,
+               branch, information_status, model, prompt_version, cost, detail_json
+           ) VALUES (?, ?, 'selection', ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            record.content_sha256,
+            record.content_kind,
+            record.choice,
+            record.confidence,
+            record.branch,
+            record.information_status,
+            record.model,
+            record.prompt_version,
+            record.cost,
+            json.dumps(detail, ensure_ascii=False, sort_keys=True),
+        ),
+    )
+    await db.commit()
 
 
 # ---------- Published / dedup ----------

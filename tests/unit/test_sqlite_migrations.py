@@ -4,6 +4,7 @@ import sqlite3 as stdlib_sqlite
 
 import pytest
 
+from gildranews.adapters.ai.news_selector import SelectionAuditRecord
 from gildranews.adapters.persistence import sqlite
 
 
@@ -69,5 +70,48 @@ async def test_legacy_database_is_upgraded_once(monkeypatch, tmp_path) -> None:
         assert migration_counts == [
             (version, 1) for version, _ in sqlite.MIGRATION_IDENTITIES
         ]
+    finally:
+        await sqlite.close()
+
+
+@pytest.mark.asyncio
+async def test_selector_decision_is_persisted_without_source_text(monkeypatch, tmp_path) -> None:
+    await sqlite.close()
+    monkeypatch.setattr(sqlite, "DB_PATH", str(tmp_path / "newsbot.db"))
+    await sqlite.init()
+    try:
+        await sqlite.record_news_selector_decision(
+            SelectionAuditRecord(
+                content_sha256="a" * 64,
+                content_kind="news",
+                choice="reject",
+                confidence=0.98,
+                probabilities={"accept": 0.02, "reject": 0.98},
+                wow_relevance=0.05,
+                has_substance=0.1,
+                branch="unknown",
+                information_status="opinion",
+                model="typesafe/jev-1.13",
+                cost=0.00001,
+                threshold=0.9,
+                shadow_mode=False,
+                blocked=True,
+            )
+        )
+        db = await sqlite._get_conn()
+        async with db.execute(
+            """SELECT content_sha256, decision, model, prompt_version, detail_json
+               FROM ai_decisions"""
+        ) as cursor:
+            row = await cursor.fetchone()
+
+        assert row[:4] == (
+            "a" * 64,
+            "reject",
+            "typesafe/jev-1.13",
+            "typesafe-selection-v1",
+        )
+        assert '"blocked": true' in row[4]
+        assert "source text" not in row[4]
     finally:
         await sqlite.close()

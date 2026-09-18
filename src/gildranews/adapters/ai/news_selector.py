@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -67,6 +69,29 @@ class SelectionDecision:
 
     def confidently_rejects(self, minimum_confidence: float) -> bool:
         return self.choice == "reject" and self.confidence >= minimum_confidence
+
+
+@dataclass(frozen=True, slots=True)
+class SelectionAuditRecord:
+    content_sha256: str
+    content_kind: str
+    choice: str
+    confidence: float
+    probabilities: dict[str, float]
+    wow_relevance: float
+    has_substance: float
+    branch: str
+    information_status: str
+    model: str
+    cost: float
+    threshold: float
+    shadow_mode: bool
+    blocked: bool
+    prompt_version: str = "typesafe-selection-v1"
+    error: str = ""
+
+
+SelectionAuditRecorder = Callable[[SelectionAuditRecord], Awaitable[None]]
 
 
 def _questions(content_kind: str) -> dict[str, dict[str, object]]:
@@ -210,11 +235,21 @@ class ClassifiedContentAI:
         *,
         min_reject_confidence: float,
         shadow_mode: bool,
+        audit_recorder: SelectionAuditRecorder | None = None,
     ) -> None:
         self._delegate = delegate
         self._selector = selector
         self._min_reject_confidence = min_reject_confidence
         self._shadow_mode = shadow_mode
+        self._audit_recorder = audit_recorder
+
+    async def _record_audit(self, record: SelectionAuditRecord) -> None:
+        if self._audit_recorder is None:
+            return
+        try:
+            await self._audit_recorder(record)
+        except Exception:
+            log.warning("news_selector_audit_failed", exc_info=True)
 
     async def filter_and_rewrite(
         self,
@@ -225,8 +260,27 @@ class ClassifiedContentAI:
     ):
         try:
             decision = await self._selector.classify(text, content_kind)
-        except Exception:
+        except Exception as exc:
             log.warning("news_selector_failed fallback=luna", exc_info=True)
+            await self._record_audit(
+                SelectionAuditRecord(
+                    content_sha256=hashlib.sha256(text.encode()).hexdigest(),
+                    content_kind=content_kind,
+                    choice="error",
+                    confidence=0,
+                    probabilities={},
+                    wow_relevance=0,
+                    has_substance=0,
+                    branch="unknown",
+                    information_status="unknown",
+                    model=str(getattr(self._selector, "_model", "unknown")),
+                    cost=0,
+                    threshold=self._min_reject_confidence,
+                    shadow_mode=self._shadow_mode,
+                    blocked=False,
+                    error=f"{type(exc).__name__}: {exc}"[:500],
+                )
+            )
         else:
             log.info(
                 "news_selector_decision choice=%s confidence=%.3f relevance=%.3f "
@@ -241,9 +295,28 @@ class ClassifiedContentAI:
                 decision.cost,
                 self._shadow_mode,
             )
-            if not self._shadow_mode and decision.confidently_rejects(
+            blocked = not self._shadow_mode and decision.confidently_rejects(
                 self._min_reject_confidence,
-            ):
+            )
+            await self._record_audit(
+                SelectionAuditRecord(
+                    content_sha256=hashlib.sha256(text.encode()).hexdigest(),
+                    content_kind=content_kind,
+                    choice=decision.choice,
+                    confidence=decision.confidence,
+                    probabilities=decision.probabilities,
+                    wow_relevance=decision.wow_relevance,
+                    has_substance=decision.has_substance,
+                    branch=decision.branch,
+                    information_status=decision.information_status,
+                    model=decision.model,
+                    cost=decision.cost,
+                    threshold=self._min_reject_confidence,
+                    shadow_mode=self._shadow_mode,
+                    blocked=blocked,
+                )
+            )
+            if blocked:
                 return FilterResult(
                     is_news=False,
                     reason=(
