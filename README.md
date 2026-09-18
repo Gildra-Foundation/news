@@ -1,20 +1,20 @@
 <div align="center">
 
-# 🤖 RuNeuroNews Bot
+# ⚔️ GildraNews
 
-### Telegram-агрегатор новостей про ИИ с AI-фильтрацией и рерайтом
+### Автономная редакция новостей World of Warcraft для Telegram
 
-Парсит десятки каналов через Telethon, отбирает важное через Gemini,
-переписывает в живом стиле, публикует в целевой канал —
-с premium-эмодзи, медиа, дедупликацией и еженедельным дайджестом.
+Собирает материалы из RSS, Reddit и X, отбирает полезные темы через TypeSafe,
+проверяет факты и готовит русский текст через GPT-5.6 Luna, защищается от
+повторов и публикует посты с подходящими медиа и игровыми Custom Emoji.
 
 <br>
 
 [![Python](https://img.shields.io/badge/python-3.12-blue.svg?logo=python&logoColor=white)](https://www.python.org)
-[![Docker](https://img.shields.io/badge/Docker-OrbStack-2496ED?logo=docker&logoColor=white)](https://www.docker.com)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://www.docker.com)
 [![aiogram](https://img.shields.io/badge/aiogram-3.x-009999?logo=telegram&logoColor=white)](https://aiogram.dev)
-[![Telethon](https://img.shields.io/badge/Telethon-1.36+-26A5E4?logo=telegram&logoColor=white)](https://docs.telethon.dev)
-[![Gemini](https://img.shields.io/badge/Gemini-3.1%20Flash-8E75B2?logo=googlegemini&logoColor=white)](https://ai.google.dev)
+[![Luna](https://img.shields.io/badge/GPT--5.6-Luna-412991?logo=openai&logoColor=white)](https://openai.com)
+[![TypeSafe](https://img.shields.io/badge/TypeSafe-Jev-334155)](https://docs.typesafe.ai/introduction)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](#-лицензия)
 
 </div>
@@ -41,17 +41,16 @@
 
 | | |
 |---|---|
-| **🛰️ Real-time мониторинг** | Telethon NewMessage events на любом числе публичных Telegram-каналов |
-| **🧠 AI-фильтр** | Gemini оценивает каждый пост: «важно для аудитории?» + «есть уникальный факт?» + важность 1–3 |
-| **✍️ Качественный рерайт** | Не пересказ, а пересборка: меняется структура, заменяется канцелярит на живые глаголы |
-| **📰 Нативные статьи** | Каждая публикация отправляется как Telegram Rich Message: заголовки, медиа, абзацы, таблицы ключевых чисел и центрированная подписка |
-| **🚫 Семантический дедуп** | Gemini сверяет с заголовками за 24 ч — одну новость из 5 каналов опубликует только раз |
-| **🔗 Импорт по ссылке** | Пришлите боту t.me / x.com / reddit.com / github.com — превью с 4 кнопками |
-| **🎨 Свои карточки** | Pillow рендерит фирменные cards для X / Reddit / GitHub когда нет родного фото |
-| **🏷️ Premium-эмодзи** | 37 эмодзи с regex-override по контексту: упоминание «Claude» → лого Anthropic |
-| **📅 Дайджест** | Раз в неделю — обзор главных постов канала с кликабельными ссылками |
-| **🗂️ 6 хэштегов** | Gemini сам выбирает: #новости #руководство #советы #полезное #обсуждения #дайджест |
-| **📊 Тематические лого** | Auto-detect Python/Go/Rust/JS, OpenAI/Anthropic/Google, GitHub/Reddit и т.д. |
+| **📡 Источники** | Wowhead RSS, Icy Veins RSS, RedditAPIs, GetXAPI и ручные ссылки |
+| **🧠 Дешёвый отбор** | TypeSafe Jev классифицирует полезность, ветку WoW и статус информации до дорогой обработки |
+| **🧾 Карта фактов** | Luna сначала выделяет подтверждающие цитаты и отпечаток события, а затем отдельным запросом пишет пост |
+| **✍️ Русская редактура** | Простые фразы, контроль терминов WoW, чисел, версий, отрицаний, PTR и названий дополнений |
+| **🚫 Защита от дублей** | SQLite хранит `story_key` и `revision_key`; разные источники одного сюжета дают одну публикацию |
+| **🖼️ Медиа** | Оригинальные изображения и видео, SVG-инфографика и безопасный тематический fallback |
+| **✨ Warcraft Emoji** | Иконки способностей, специализаций, рейдов, существ и дополнений разрешаются через Wowhead |
+| **📰 Гибкое оформление** | Обычный пост или Telegram Rich Message выбирается по структуре материала, а не принудительно |
+| **♻️ Очередь ошибок** | Временные сбои AI и редактора не выпускают сырой текст: кандидат ждёт автоматического повтора |
+| **📊 Наблюдаемость** | `/status`, журнал прогонов, аудит TypeSafe, healthcheck контейнера и версионированные миграции |
 
 ---
 
@@ -59,67 +58,47 @@
 
 ```mermaid
 flowchart LR
-    subgraph Sources["📡 Источники"]
-        S1["Telegram-каналы"]
-        S2["X / Twitter"]
-        S3["Reddit"]
-        S4["GitHub"]
-    end
-
-    subgraph Bot["🤖 newsbot"]
-        TR["Telethon<br/>userbot"]
-        EXT["external_fetch<br/>FxTwitter / Reddit JSON"]
-        AI["Gemini<br/>filter + rewrite"]
-        RP["Pillow<br/>render_post"]
-        DB[("SQLite<br/>WAL")]
-        TG["aiogram<br/>Bot API"]
-    end
-
-    subgraph Output["📰 Канал"]
-        CH["@runeuronews"]
-    end
-
-    S1 --> TR --> AI
-    S2 --> EXT --> AI
-    S3 --> EXT --> AI
-    S4 --> EXT --> AI
-    AI --> DB
-    AI --> RP
-    RP --> TG
-    AI --> TG
-    TG --> CH
+    SRC["RSS / Reddit / X / ручная ссылка"] --> C["Candidate"]
+    C --> J["TypeSafe Jev<br/>предварительный отбор"]
+    J --> F["Luna<br/>карта фактов"]
+    F --> D["Luna<br/>русский черновик"]
+    D --> Q["Редакторские проверки"]
+    Q --> U["story_key / revision_key"]
+    U --> M["Медиа и Warcraft Emoji"]
+    M --> T["Telegram"]
+    T --> DB[("SQLite: история и аудит")]
+    DB -. "48 ч контекста" .-> F
 ```
 
 ### Поток обработки одного поста
 
 ```mermaid
 sequenceDiagram
-    participant Src as Канал-источник
-    participant TR as Telethon
+    participant Src as Источник
+    participant Sel as TypeSafe
+    participant Luna as App Server / Luna
     participant DB as SQLite
-    participant AI as Gemini
     participant Bot as Bot API
     participant CH as Канал
 
-    Src->>TR: NewMessage event
-    TR->>DB: claim_message (atomic INSERT OR IGNORE)
-    DB-->>TR: новый
-    TR->>DB: recent_published_titles(24h)
-    DB-->>TR: list of 50 titles
-    TR->>AI: filter_and_rewrite(post, titles)
-    Note over AI: 1) Дубль?<br/>2) Two-question test<br/>3) Importance 1-3<br/>4) Rewrite
-    AI-->>TR: {is_news, title, body, hashtag, emoji_theme}
-    TR->>Bot: publish с premium-emoji + хэштег
+    Src->>Sel: кандидат
+    Sel->>DB: решение, уверенность, модель, стоимость
+    Sel->>Luna: прошедший кандидат
+    Luna->>Luna: этап 1 — факты и fingerprint
+    Luna->>Luna: этап 2 — публичный текст
+    Luna->>DB: резервирование story_key + revision_key
+    DB-->>Luna: новый сюжет или важное развитие
+    Luna->>Bot: текст, медиа, ссылки и Custom Emoji
     Bot->>CH: Сообщение
-    Bot-->>TR: target_message_id
-    TR->>DB: record_published
+    Bot-->>DB: target_message_id и история публикации
 ```
 
 ---
 
 ## 🚀 Быстрый старт
 
-> Требуется OrbStack или Docker Desktop. Telegram Premium у владельца бота — желателен.
+> Требуется Docker с Compose. Telegram Premium у владельца MTProto-сессии нужен
+> только для публикации Premium Custom Emoji.
 
 ### 1. Клонировать репо
 
@@ -229,13 +208,13 @@ docker compose up -d --force-recreate
 Бот:
 1. Скачает контент (GetXAPI/RedditAPIs, если явно включены; затем бесплатные
    FxTwitter/Reddit JSON; при блокировке — явно включённый Scrape.do через ParsesUnix)
-2. Переведёт + переформулирует через Gemini
+2. Проверит факты и подготовит русский текст через App Server с Luna
 3. Отрендерит карточку через Pillow если нет родного фото
 4. Покажет **превью с 4 кнопками**:
 
 | Кнопка | Действие |
 |---|---|
-| ✏️ Редактировать | Бот ждёт текстовую инструкцию правки, Gemini переделает |
+| ✏️ Редактировать | Бот ждёт текстовую инструкцию, после чего Luna пересоберёт текст |
 | ✅ Опубликовать | Шлёт в канал + пишет в БД для будущего дедупа |
 | 🔗 Оригинал в посте | Toggle: добавить курсивно-подчёркнутую ссылку в финал поста |
 | ❌ Отменить | Удалить черновик и скриншот |
@@ -283,9 +262,9 @@ gantt
 
 Раз в воскресенье в 18:00 UTC бот:
 1. Достаёт все посты с `target_message_id` за последние 7 дней
-2. Шлёт в Gemini → структурированный JSON `{intro, sections: [{name, items}]}`
-3. Собирает HTML с кликабельными ссылками вида `https://t.me/runeuronews/<id>`
-4. Публикует **с обложкой** [`assets/digest_cover.jpg`](assets/digest_cover.jpg) и хэштегом `#дайджест@runeuronews`
+2. Шлёт в Luna → структурированный JSON `{intro, sections: [{name, items}]}`
+3. Собирает HTML с кликабельными ссылками вида `https://t.me/gildrawow/<id>`
+4. Публикует **с обложкой** [`assets/digest_cover.jpg`](assets/digest_cover.jpg) и хэштегом `#дайджест@gildrawow`
 
 Или вручную — `/digest` в личке.
 
@@ -299,7 +278,7 @@ gantt
 │   ├── domain/                # Общие модели без зависимостей от SDK
 │   ├── application/           # Pipeline, дайджест и контракты внешних компонентов
 │   ├── adapters/
-│   │   ├── ai/                # AI-провайдеры; сейчас Gemini, далее ChatGPT Server
+│   │   ├── ai/                # TypeSafe-отбор и ChatGPT App Server / Luna
 │   │   ├── sources/           # Telegram, X, Reddit и GitHub
 │   │   ├── publishing/        # Публикация через Telegram Bot API
 │   │   ├── persistence/       # SQLite
@@ -343,12 +322,21 @@ uv pip install --python .venv/bin/python -e '.[dev]'
 TG_API_ID=12345678
 TG_API_HASH=abcd1234...
 BOT_TOKEN=1234:ABCdef...
-TARGET_CHANNEL=@runeuronews
+TARGET_CHANNEL=@gildrawow
 ADMIN_USER_ID=123456789
 
-# Gemini
-GEMINI_API_KEY=AIzaSy...
-GEMINI_MODEL=gemini-3.1-flash-lite
+# Основной AI-провайдер
+AI_PROVIDER=app_server
+APP_SERVER_URL=http://host.docker.internal:4202/ag-ui
+APP_SERVER_MODEL=gpt-5.6-luna
+APP_SERVER_REASONING_EFFORT=xhigh
+
+# Предварительный отбор TypeSafe через OpenRouter
+NEWS_SELECTOR_ENABLED=true
+NEWS_SELECTOR_MODEL=typesafe/jev-1.13
+NEWS_SELECTOR_MIN_REJECT_CONFIDENCE=0.90
+NEWS_SELECTOR_SHADOW_MODE=false
+OPENROUTER_API_KEY_FILE=/app/data/openrouter_api_key
 
 # Опциональные платные маршруты (без enabled=true запросов не будет)
 GETXAPI_KEY=...
@@ -394,14 +382,14 @@ MTProto, поэтому Premium Emoji сохраняются, а в дату `FO
 
 | Слой | Стек |
 |---|---|
-| **Чтение каналов** | Telethon 1.36+ (MTProto userbot) |
+| **Источники** | RSS, RedditAPIs, GetXAPI и ручные ссылки; чтение Telegram по умолчанию выключено |
 | **Публикация и команды** | aiogram 3.x (Bot API) |
-| **AI** | google-genai (Gemini 3.1 / 2.5) с structured output через pydantic |
-| **Internet-fetch** | httpx с persistent connection pool, FxTwitter API |
-| **Рендер карточек** | Pillow с font-cache, шрифт DejaVu Sans (Unicode + кириллица) |
-| **Хранилище** | aiosqlite + WAL + memory-mapped 64MB |
-| **Расписание** | APScheduler — interval 30 min + cron weekly |
-| **Деплой** | Docker (python:3.12-slim ~370MB) + OrbStack |
+| **AI** | TypeSafe Jev через OpenRouter Decisions API и GPT-5.6 Luna через App Server |
+| **Internet-fetch** | httpx, ParsesUnix/Scrape.do и безопасные адаптеры источников |
+| **Рендер** | Pillow и SVG-шаблоны с поддержкой кириллицы |
+| **Хранилище** | aiosqlite, WAL, версионированные миграции и атомарное резервирование публикаций |
+| **Расписание** | APScheduler: RSS, Reddit/X утром и вечером, повторы и еженедельный дайджест |
+| **Деплой** | Docker Compose, lock-файлы с хэшами и встроенный healthcheck |
 | **Лимиты** | mem 512MB, CPU 1.0, лог-ротация 10MB×5 |
 
 ### Производительность
@@ -410,8 +398,8 @@ MTProto, поэтому Premium Emoji сохраняются, а в дату `FO
 |---|---|
 | RAM в idle | ~150 MiB |
 | CPU в idle | <0.05% |
-| Один пост: fetch → filter → publish | ~3–5 сек |
-| Telethon-сессия persistent, httpx с keep-alive, Gemini-клиент кэширован |
+| Один пост: fetch → filter → publish | зависит от App Server; тайм-аут одного запроса 240 секунд |
+| Соединения | MTProto-сессия в volume, httpx keep-alive, AI-запросы сериализованы |
 
 ---
 
