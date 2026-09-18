@@ -19,6 +19,11 @@ log = logging.getLogger(__name__)
 DB_PATH = "data/newsbot.db"
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    applied_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS sources (
     username TEXT PRIMARY KEY,
     added_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -160,6 +165,7 @@ CREATE TABLE IF NOT EXISTS pending_edits (
 # ---------- Persistent connection ----------
 _conn: aiosqlite.Connection | None = None
 _conn_lock = asyncio.Lock()
+_schema_lock = asyncio.Lock()
 
 
 async def _get_conn() -> aiosqlite.Connection:
@@ -200,36 +206,64 @@ def _normalize(username: str) -> str:
 
 
 async def init() -> None:
-    db = await _get_conn()
-    await db.executescript(SCHEMA)
-    # Миграция: добавляем колонки в drafts если их нет
-    async with db.execute("PRAGMA table_info(drafts)") as cur:
-        cols = {row[1] async for row in cur}
-    if "include_original" not in cols:
-        await db.execute("ALTER TABLE drafts ADD COLUMN include_original INTEGER DEFAULT 0")
-    if "media_type" not in cols:
-        await db.execute("ALTER TABLE drafts ADD COLUMN media_type TEXT DEFAULT 'photo'")
-    if "hashtag" not in cols:
-        await db.execute("ALTER TABLE drafts ADD COLUMN hashtag TEXT DEFAULT ''")
-    if "inline_links_json" not in cols:
-        await db.execute(
-            "ALTER TABLE drafts ADD COLUMN inline_links_json TEXT NOT NULL DEFAULT '[]'"
-        )
-    if "custom_emojis_json" not in cols:
-        await db.execute(
-            "ALTER TABLE drafts ADD COLUMN custom_emojis_json TEXT NOT NULL DEFAULT '[]'"
-        )
-    # Миграция published_posts: target_message_id (id поста в нашем канале — для ссылок в дайджесте)
-    async with db.execute("PRAGMA table_info(published_posts)") as cur:
-        pcols = {row[1] async for row in cur}
-    if "target_message_id" not in pcols:
-        await db.execute("ALTER TABLE published_posts ADD COLUMN target_message_id INTEGER")
-    if "story_key" not in pcols:
-        await db.execute("ALTER TABLE published_posts ADD COLUMN story_key TEXT")
-    if "revision_key" not in pcols:
-        await db.execute("ALTER TABLE published_posts ADD COLUMN revision_key TEXT")
-    if "fingerprint_json" not in pcols:
-        await db.execute("ALTER TABLE published_posts ADD COLUMN fingerprint_json TEXT")
+    async with _schema_lock:
+        db = await _get_conn()
+        await db.executescript(SCHEMA)
+        await _run_migrations(db)
+
+
+async def _column_names(db: aiosqlite.Connection, table: str) -> set[str]:
+    async with db.execute(f"PRAGMA table_info({table})") as cursor:
+        return {row[1] async for row in cursor}
+
+
+async def _add_column(
+    db: aiosqlite.Connection,
+    table: str,
+    columns: set[str],
+    name: str,
+    definition: str,
+) -> None:
+    if name in columns:
+        return
+    await db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+    columns.add(name)
+
+
+async def _migration_1(db: aiosqlite.Connection) -> None:
+    """Bring databases created before versioned migrations to the current baseline."""
+
+    draft_columns = await _column_names(db, "drafts")
+    await _add_column(db, "drafts", draft_columns, "include_original", "INTEGER DEFAULT 0")
+    await _add_column(db, "drafts", draft_columns, "media_type", "TEXT DEFAULT 'photo'")
+    await _add_column(db, "drafts", draft_columns, "hashtag", "TEXT DEFAULT ''")
+    await _add_column(
+        db,
+        "drafts",
+        draft_columns,
+        "inline_links_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )
+    await _add_column(
+        db,
+        "drafts",
+        draft_columns,
+        "custom_emojis_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )
+
+    published_columns = await _column_names(db, "published_posts")
+    await _add_column(
+        db,
+        "published_posts",
+        published_columns,
+        "target_message_id",
+        "INTEGER",
+    )
+    await _add_column(db, "published_posts", published_columns, "story_key", "TEXT")
+    await _add_column(db, "published_posts", published_columns, "revision_key", "TEXT")
+    await _add_column(db, "published_posts", published_columns, "fingerprint_json", "TEXT")
+
     await db.execute(
         """INSERT OR IGNORE INTO daily_source_usage(source, day_utc, publication_count)
            SELECT 'reddit', date(posted_at), COUNT(*) FROM published_posts
@@ -240,7 +274,30 @@ async def init() -> None:
            SELECT 'x', date(posted_at), COUNT(*) FROM published_posts
            WHERE channel = 'x' GROUP BY date(posted_at)"""
     )
-    await db.commit()
+
+
+_MIGRATIONS = ((1, "legacy_columns_and_source_quotas", _migration_1),)
+MIGRATION_IDENTITIES = tuple((version, name) for version, name, _ in _MIGRATIONS)
+CURRENT_SCHEMA_VERSION = max(version for version, _, _ in _MIGRATIONS)
+
+
+async def _run_migrations(db: aiosqlite.Connection) -> None:
+    async with db.execute("SELECT version FROM schema_migrations") as cursor:
+        applied = {row[0] async for row in cursor}
+    for version, name, migration in _MIGRATIONS:
+        if version in applied:
+            continue
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            await migration(db)
+            await db.execute(
+                "INSERT INTO schema_migrations(version, name) VALUES (?, ?)",
+                (version, name),
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
 
 
 # ---------- Sources ----------
