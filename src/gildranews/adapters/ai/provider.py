@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from gildranews.adapters.ai import gemini
 from gildranews.adapters.ai.app_server import AppServerClient, AppServerError
+from gildranews.adapters.ai.news_selector import ClassifiedContentAI, OpenRouterNewsSelector
 from gildranews.adapters.ai.prompts import WOW_CLASS_TERMINOLOGY
 from gildranews.adapters.editor.manacost import EditorClient
 from gildranews.application.translation_qa import (
@@ -652,21 +653,34 @@ class GeminiContentAI:
 
 def build_content_ai(cfg: Config):
     if cfg.ai_provider == "gemini":
-        return GeminiContentAI(cfg.gemini_api_key, cfg.gemini_model)
-    app_server = AppServerClient(
-        endpoint=cfg.app_server_url,
-        token=cfg.app_server_token,
-        model=cfg.app_server_model,
-        reasoning_effort=cfg.app_server_reasoning_effort,
-        timeout_seconds=cfg.ai_timeout_seconds,
-    )
-    editor = (
-        EditorClient(
-            cfg.editor_url,
-            token=cfg.editor_token,
+        content_ai = GeminiContentAI(cfg.gemini_api_key, cfg.gemini_model)
+    else:
+        app_server = AppServerClient(
+            endpoint=cfg.app_server_url,
+            token=cfg.app_server_token,
+            model=cfg.app_server_model,
+            reasoning_effort=cfg.app_server_reasoning_effort,
             timeout_seconds=cfg.ai_timeout_seconds,
         )
-        if cfg.editor_url
-        else None
+        editor = (
+            EditorClient(
+                cfg.editor_url,
+                token=cfg.editor_token,
+                timeout_seconds=cfg.ai_timeout_seconds,
+            )
+            if cfg.editor_url
+            else None
+        )
+        content_ai = AppServerContentAI(app_server, editor)
+    if not cfg.news_selector_enabled:
+        return content_ai
+    return ClassifiedContentAI(
+        content_ai,
+        OpenRouterNewsSelector(
+            api_key=cfg.openrouter_api_key,
+            model=cfg.news_selector_model,
+            timeout_seconds=cfg.news_selector_timeout_seconds,
+        ),
+        min_reject_confidence=cfg.news_selector_min_reject_confidence,
+        shadow_mode=cfg.news_selector_shadow_mode,
     )
-    return AppServerContentAI(app_server, editor)

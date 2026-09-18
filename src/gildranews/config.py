@@ -40,6 +40,17 @@ def _bounded_int(key: str, default: int, *, minimum: int, maximum: int) -> int:
     return value
 
 
+def _bounded_float(key: str, default: float, *, minimum: float, maximum: float) -> float:
+    raw = os.getenv(key, "").strip()
+    try:
+        value = float(raw) if raw else default
+    except ValueError as exc:
+        raise RuntimeError(f"{key} должен быть числом") from exc
+    if not minimum <= value <= maximum:
+        raise RuntimeError(f"{key} должен быть от {minimum} до {maximum}")
+    return value
+
+
 def _bool(key: str, default: bool = False) -> bool:
     raw = os.getenv(key, "").strip().lower()
     if not raw:
@@ -117,6 +128,12 @@ class Config:
     app_server_model: str = "gpt-5.6-luna"
     app_server_reasoning_effort: str = "xhigh"
     ai_timeout_seconds: int = 240
+    news_selector_enabled: bool = False
+    openrouter_api_key: str = ""
+    news_selector_model: str = "typesafe/jev-1.13"
+    news_selector_shadow_mode: bool = True
+    news_selector_min_reject_confidence: float = 0.8
+    news_selector_timeout_seconds: int = 20
     editor_url: str = "http://editor-gateway:8080/v2/edit"
     editor_token: str = ""
     dedup_context_hours: int = 48
@@ -196,6 +213,16 @@ def load() -> Config:
     scrape_do_enabled = _bool("SCRAPE_DO_ENABLED")
     if scrape_do_enabled and not os.getenv("SCRAPE_DO_TOKEN", "").strip():
         raise RuntimeError("Для SCRAPE_DO_ENABLED=true задайте SCRAPE_DO_TOKEN")
+    news_selector_enabled = _bool("NEWS_SELECTOR_ENABLED")
+    openrouter_api_key = _secret(
+        "OPENROUTER_API_KEY",
+        "OPENROUTER_API_KEY_FILE",
+        "/app/data/openrouter_api_key",
+    )
+    if news_selector_enabled and not openrouter_api_key:
+        raise RuntimeError(
+            "Для NEWS_SELECTOR_ENABLED=true необходимо задать OPENROUTER_API_KEY"
+        )
     return Config(
         tg_api_id=tg_api_id,
         tg_api_hash=tg_api_hash,
@@ -223,6 +250,22 @@ def load() -> Config:
             os.getenv("APP_SERVER_REASONING_EFFORT", "xhigh").strip() or "xhigh"
         ),
         ai_timeout_seconds=_int("AI_TIMEOUT_SECONDS", 240),
+        news_selector_enabled=news_selector_enabled,
+        openrouter_api_key=openrouter_api_key,
+        news_selector_model=(
+            os.getenv("NEWS_SELECTOR_MODEL", "typesafe/jev-1.13").strip()
+            or "typesafe/jev-1.13"
+        ),
+        news_selector_shadow_mode=_bool("NEWS_SELECTOR_SHADOW_MODE", True),
+        news_selector_min_reject_confidence=_bounded_float(
+            "NEWS_SELECTOR_MIN_REJECT_CONFIDENCE",
+            0.8,
+            minimum=0.5,
+            maximum=1.0,
+        ),
+        news_selector_timeout_seconds=_bounded_int(
+            "NEWS_SELECTOR_TIMEOUT_SECONDS", 20, minimum=2, maximum=120,
+        ),
         editor_url=os.getenv("EDITOR_URL", "").strip(),
         editor_token=os.getenv("EDITOR_TOKEN", "").strip(),
         dedup_context_hours=_bounded_int(

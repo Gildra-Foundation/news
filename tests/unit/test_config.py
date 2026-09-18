@@ -14,6 +14,8 @@ def test_load_allows_bot_api_mode_without_telethon_credentials(monkeypatch) -> N
     monkeypatch.delenv("MTPROTO_PUBLISHER_ENABLED", raising=False)
     monkeypatch.delenv("EMOJI_AUTOCREATE_ENABLED", raising=False)
     monkeypatch.delenv("EDITOR_URL", raising=False)
+    monkeypatch.delenv("NEWS_SELECTOR_ENABLED", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
     cfg = config.load()
 
@@ -29,6 +31,38 @@ def test_load_allows_bot_api_mode_without_telethon_credentials(monkeypatch) -> N
     assert cfg.emoji_autocreate_enabled is False
     assert cfg.emoji_max_new_per_day == 10
     assert cfg.editor_url == ""
+    assert cfg.news_selector_enabled is False
+    assert cfg.openrouter_api_key == ""
+
+
+def test_loads_openrouter_news_selector(monkeypatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TARGET_CHANNEL", "channel")
+    monkeypatch.setenv("AI_PROVIDER", "app_server")
+    monkeypatch.setenv("NEWS_SELECTOR_ENABLED", "true")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-secret")
+    monkeypatch.setenv("NEWS_SELECTOR_MODEL", "typesafe/jev-1.13")
+    monkeypatch.setenv("NEWS_SELECTOR_SHADOW_MODE", "false")
+    monkeypatch.setenv("NEWS_SELECTOR_MIN_REJECT_CONFIDENCE", "0.87")
+
+    cfg = config.load()
+
+    assert cfg.news_selector_enabled is True
+    assert cfg.openrouter_api_key == "openrouter-secret"
+    assert cfg.news_selector_model == "typesafe/jev-1.13"
+    assert cfg.news_selector_shadow_mode is False
+    assert cfg.news_selector_min_reject_confidence == pytest.approx(0.87)
+
+
+def test_enabled_news_selector_requires_openrouter_key(monkeypatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TARGET_CHANNEL", "channel")
+    monkeypatch.setenv("AI_PROVIDER", "app_server")
+    monkeypatch.setenv("NEWS_SELECTOR_ENABLED", "true")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
+        config.load()
 
 
 def test_loads_custom_emoji_limits(monkeypatch) -> None:
