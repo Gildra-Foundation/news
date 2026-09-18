@@ -4,7 +4,7 @@ import json
 import logging
 import re
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -75,17 +75,24 @@ _JSON_SUFFIX = """
 Поле infographic необязательно. Добавляй его только при наличии 2–4 точных числовых фактов; value обязан дословно встречаться во входном source_text/post. Не добавляй фактов от себя. Поле source всегда оставляй пустым.
 """
 
-_FILTER_JSON_SUFFIX = """
+_ANALYSIS_JSON_SUFFIX = """
 
+ЭТАП 1 — ОТБОР И КАРТА ФАКТОВ. На этом этапе не пиши публичный пост.
 Верни только JSON без Markdown и пояснений:
-{"is_news":true,"reason":"...","title":"...","body":"...","emoji_theme":"...","hashtag":"...","infographic":null,"references":[],"fingerprint":{"game_branch":"retail","version":"12.2.5","subject":"стабильное название события","action":"ослабить босса","status":"announced","effective_date":"","scope":[],"material_facts":[]}}
-infographic может быть объектом с полями kicker, title, facts (2–4 объектов value/label), source="". Каждое value должно дословно встречаться во входном post. Для отклонённой новости infographic=null. Не добавляй источник, URL или название издания в title/body.
-fingerprint обязателен для принятой новости. Он описывает само событие, а не статью: game_branch=retail|classic|forever; version — версия игры; subject — короткий устойчивый объект изменения; action — короткое действие; status — announced|testing|scheduled|live|cancelled или пусто; effective_date — точная дата либо пусто; scope и material_facts содержат только существенные факты из post. Для одного события в разных источниках выбирай одинаковые subject и action. Дополнительные примеры и пересказ не являются новым фактом.
-references — не более восьми объектов {"label":"точный текст из title/body","query":"точное исходное английское имя из post","kind":"class|specialization|spell|talent|item|cosmetic|transmog_set|mount|pet|achievement|raid|dungeon|boss|creature|faction|profession|event|expansion","branch":"retail|classic|forever","role":"primary|secondary"}. Название дополнения сохраняй на английском и помечай kind=expansion. URL, ID и изображения не придумывай: их найдёт бот. Главную изменяемую сущность пометь primary, остальные secondary. Для остальных случаев references=[].
-Каждый названный рейд обязательно включай отдельной reference с kind=raid, даже если уже добавлен его босс, существо или способность.
-Для новости об изменениях класса обязательно добавь две references: изменённую способность или талант как primary и её специализацию как secondary. Для specialization в query укажи полную пару «специализация + класс», например Restoration Druid.
-В рейтинге специализаций включи в references две самые важные специализации с kind=specialization для значков и названный рейд с kind=raid для ссылки. Для специализаций используй точные английские названия из post; классы отдельными references не добавляй.
-Если материал относится к WoW: Forever, обязательно включи reference с label="WoW: Forever", query="WoW: Forever", kind="expansion", branch="forever", role="primary".
+{"is_news":true,"reason":"...","emoji_theme":"...","evidence":[{"quote":"точная цитата из post","importance":"essential"}],"fingerprint":{"game_branch":"retail","version":"12.2.5","subject":"стабильное название события","action":"изменить механику","status":"testing","effective_date":"","scope":[],"material_facts":[]}}
+Для принятого материала fingerprint обязателен. evidence содержит до 12 коротких точных цитат из post: essential — без факта пост станет неверным или неполным, context — факт только помогает понять событие. Не переводи и не пересказывай quote. Для отклонённого материала верни evidence=[] и fingerprint=null.
+"""
+
+_DRAFT_JSON_SUFFIX = """
+
+ЭТАП 2 — ПУБЛИЧНЫЙ ТЕКСТ. Решение об отборе уже принято на первом этапе.
+Пиши title и body только по post, verified_evidence и fingerprint из входного JSON. Не добавляй неподтверждённые сведения. Факты с importance=essential нельзя терять. Верни только JSON без Markdown и пояснений:
+{"title":"...","body":"...","hashtag":"новости","infographic":null,"references":[]}
+infographic может быть объектом с полями kicker, title, facts (2–4 объектов value/label), source="". Каждое value должно дословно встречаться во входном post. Не добавляй источник, URL или название издания в title/body.
+references — не более восьми объектов {"label":"точный текст из title/body","query":"точное исходное английское имя из post","kind":"class|specialization|spell|talent|item|cosmetic|transmog_set|mount|pet|achievement|raid|dungeon|boss|creature|faction|profession|event|expansion","branch":"retail|classic|forever","role":"primary|secondary"}. URL, ID и изображения не придумывай.
+Название дополнения сохраняй на английском и помечай kind=expansion. Каждый названный рейд обязательно включай отдельной reference с kind=raid, даже если уже добавлен его босс, существо или способность.
+Для новости об изменениях класса добавь изменённую способность или талант как primary и её специализацию как secondary. Для specialization в query укажи полную пару «специализация + класс», например Restoration Druid. Класс отдельной reference не добавляй.
+В рейтинге специализаций включи две самые важные специализации с kind=specialization и названный рейд с kind=raid. Если материал относится к WoW: Forever, обязательно включи reference с label="WoW: Forever", query="WoW: Forever", kind="expansion", branch="forever", role="primary".
 """
 
 _RUSSIAN_REPAIR_PROMPT = """Ты — выпускающий редактор русскоязычного канала о World of Warcraft.
@@ -151,19 +158,25 @@ class _FingerprintOutput(BaseModel):
     material_facts: list[str] = Field(default_factory=list, max_length=12)
 
 
+class _EvidenceOutput(BaseModel):
+    quote: str = Field(min_length=1, max_length=1000)
+    importance: Literal["essential", "context"] = "essential"
+
+
+class _AnalysisOutput(BaseModel):
+    is_news: bool
+    reason: str
+    emoji_theme: str = ""
+    evidence: list[_EvidenceOutput] = Field(default_factory=list, max_length=12)
+    fingerprint: _FingerprintOutput | None = None
+
+
 class _RewriteOutput(BaseModel):
     title: str
     body: str
     hashtag: str = ""
     infographic: _InfographicOutput | None = None
     references: list[_ReferenceOutput] = Field(default_factory=list)
-
-
-class _FilterOutput(_RewriteOutput):
-    is_news: bool
-    reason: str
-    emoji_theme: str = ""
-    fingerprint: _FingerprintOutput | None = None
 
 
 class _DigestItem(BaseModel):
@@ -179,6 +192,22 @@ class _DigestSection(BaseModel):
 class _DigestOutput(BaseModel):
     intro: str
     sections: list[_DigestSection]
+
+
+def _verified_evidence(source: str, evidence: list[_EvidenceOutput]) -> list[_EvidenceOutput]:
+    source_key = re.sub(r"\s+", " ", source).casefold()
+    verified = [
+        item
+        for item in evidence
+        if re.sub(r"\s+", " ", item.quote).strip().casefold() in source_key
+    ]
+    if len(verified) != len(evidence):
+        log.warning(
+            "luna_evidence_rejected unsupported=%d total=%d",
+            len(evidence) - len(verified),
+            len(evidence),
+        )
+    return verified
 
 
 def _context_excerpt(value: str, limit: int, *, keep_paragraphs: bool) -> str:
@@ -459,26 +488,43 @@ class AppServerContentAI:
         content_kind: str = "news",
     ) -> FilterResult | None:
         story_index, voice_examples = _channel_context(recent_posts)
-        output = await self._complete(
-            gemini._filter_prompt(content_kind) + _FILTER_JSON_SUFFIX,
+        analysis = await self._complete(
+            gemini._filter_prompt(content_kind) + _ANALYSIS_JSON_SUFFIX,
             {
                 "post": text[:12_000],
                 "recent_published": story_index,
                 "recent_voice_examples": voice_examples,
                 "available_emoji_themes": list(emoji_themes),
             },
-            _FilterOutput,
+            _AnalysisOutput,
         )
-        if not isinstance(output, _FilterOutput):
+        if not isinstance(analysis, _AnalysisOutput):
             raise InvalidAIResponseError("Luna не вернула результат анализа новости")
-        if not output.is_news:
-            return FilterResult(is_news=False, reason=output.reason.strip())
-        fingerprint = _event_fingerprint(output.fingerprint)
+        if not analysis.is_news:
+            return FilterResult(is_news=False, reason=analysis.reason.strip())
+        fingerprint = _event_fingerprint(analysis.fingerprint)
         if fingerprint is None:
             log.warning("Luna accepted a story without a valid event fingerprint")
             raise InvalidAIResponseError(
                 "Luna не вернула обязательный отпечаток события",
             )
+        verified_evidence = _verified_evidence(text, analysis.evidence)
+        output = await self._complete(
+            gemini._filter_prompt(content_kind) + _DRAFT_JSON_SUFFIX,
+            {
+                "post": text[:12_000],
+                "verified_evidence": [
+                    item.model_dump(mode="json") for item in verified_evidence
+                ],
+                "fingerprint": analysis.fingerprint.model_dump(mode="json"),
+                "recent_published": story_index,
+                "recent_voice_examples": voice_examples,
+                "available_emoji_themes": list(emoji_themes),
+            },
+            _RewriteOutput,
+        )
+        if not isinstance(output, _RewriteOutput):
+            raise InvalidAIResponseError("Luna не вернула черновик новости")
         rewrite = await self._finish_rewrite(text, output)
         if rewrite is None:
             raise InvalidAIResponseError(
@@ -564,10 +610,10 @@ class AppServerContentAI:
             )
         return FilterResult(
             is_news=True,
-            reason=output.reason.strip(),
+            reason=analysis.reason.strip(),
             title=rewrite.title,
             body=rewrite.body,
-            emoji_theme=output.emoji_theme.strip(),
+            emoji_theme=analysis.emoji_theme.strip(),
             hashtag=rewrite.hashtag,
             infographic=rewrite.infographic,
             references=rewrite.references,

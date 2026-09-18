@@ -249,6 +249,80 @@ class _SequenceAppServer(_StubAppServer):
 
 
 @pytest.mark.asyncio
+async def test_luna_separates_fact_analysis_from_public_draft() -> None:
+    class _FactThenDraftAppServer:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        async def complete(self, system: str, user: str) -> str:
+            payload = json.loads(user)
+            self.calls.append((system, payload))
+            if len(self.calls) == 1:
+                return json.dumps(
+                    {
+                        "is_news": True,
+                        "reason": "Существенное изменение рейда",
+                        "emoji_theme": "raid",
+                        "evidence": [
+                            {
+                                "quote": "Patch 12.2.5 PTR reduces raid damage by 15%.",
+                                "importance": "essential",
+                            },
+                            {
+                                "quote": "Blizzard also confirmed a new raid reward.",
+                                "importance": "context",
+                            },
+                        ],
+                        "fingerprint": {
+                            "game_branch": "retail",
+                            "version": "12.2.5",
+                            "subject": "урон в рейде",
+                            "action": "снизить урон",
+                            "status": "testing",
+                            "effective_date": "",
+                            "scope": ["рейд"],
+                            "material_facts": ["урон снижен на 15%"],
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+            return json.dumps(
+                {
+                    "title": "На PTR ослабили урон в рейде",
+                    "body": "В обновлении 12.2.5 урон в рейде снизили на 15%.",
+                    "hashtag": "новости",
+                    "references": [],
+                },
+                ensure_ascii=False,
+            )
+
+        async def aclose(self) -> None:
+            return None
+
+    app_server = _FactThenDraftAppServer()
+
+    result = await AppServerContentAI(app_server).filter_and_rewrite(
+        "Patch 12.2.5 PTR reduces raid damage by 15%.",
+        [],
+        [],
+    )
+
+    assert result is not None
+    assert result.fingerprint is not None
+    assert result.fingerprint.material_facts == ("урон снижен на 15%",)
+    assert len(app_server.calls) == 2
+    assert "ЭТАП 1" in app_server.calls[0][0]
+    assert "ЭТАП 2" in app_server.calls[1][0]
+    assert app_server.calls[1][1]["verified_evidence"] == [
+        {
+            "quote": "Patch 12.2.5 PTR reduces raid damage by 15%.",
+            "importance": "essential",
+        },
+    ]
+    assert app_server.calls[1][1]["fingerprint"]["status"] == "testing"
+
+
+@pytest.mark.asyncio
 async def test_luna_propagates_app_server_connectivity_failure() -> None:
     class _UnavailableAppServer:
         async def complete(self, system: str, user: str) -> str:
