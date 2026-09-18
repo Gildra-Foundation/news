@@ -15,9 +15,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     librsvg2-bin \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md requirements.lock requirements-build.lock ./
 COPY src/ ./src/
-RUN pip install .
+RUN pip install --require-hashes -r requirements-build.lock && \
+    pip install --require-hashes -r requirements.lock && \
+    pip install --no-build-isolation --no-deps .
 
 COPY assets/ ./assets/
 
