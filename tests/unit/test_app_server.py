@@ -208,6 +208,8 @@ class _StubAppServer:
         self.system = system
         self.user = user
         response = dict(self.response)
+        if response.get("is_news") is True and "evidence" not in response and "post" in json.loads(user):
+            response["evidence"] = [{"quote": json.loads(user)["post"][:1000], "importance": "essential"}]
         if response.get("is_news") is True and "fingerprint" not in response:
             response["fingerprint"] = {
                 "game_branch": "retail",
@@ -234,6 +236,8 @@ class _SequenceAppServer(_StubAppServer):
         self.system = system
         self.user = user
         response = dict(next(self.responses))
+        if response.get("is_news") is True and "evidence" not in response and "post" in json.loads(user):
+            response["evidence"] = [{"quote": json.loads(user)["post"][:1000], "importance": "essential"}]
         if response.get("is_news") is True and "fingerprint" not in response:
             response["fingerprint"] = {
                 "game_branch": "retail",
@@ -260,7 +264,7 @@ async def test_luna_separates_fact_analysis_from_public_draft() -> None:
             if len(self.calls) == 1:
                 return json.dumps(
                     {
-                        "is_news": True,
+                        "is_news": True, "news_value": "practical",
                         "reason": "Существенное изменение рейда",
                         "emoji_theme": "raid",
                         "evidence": [
@@ -323,6 +327,59 @@ async def test_luna_separates_fact_analysis_from_public_draft() -> None:
 
 
 @pytest.mark.asyncio
+async def test_luna_normalizes_combined_retail_and_classic_branch() -> None:
+    class _CombinedBranchAppServer:
+        async def complete(self, system: str, user: str) -> str:
+            if "ЭТАП 1" in system:
+                return json.dumps(
+                    {
+                        "is_news": True, "news_value": "practical",
+                        "reason": "Событие относится к нескольким версиям игры",
+                        "emoji_theme": "event",
+                        "evidence": [
+                            {
+                                "quote": "Pirate's Day is active in Retail and Classic.",
+                                "importance": "essential",
+                            },
+                        ],
+                        "fingerprint": {
+                            "game_branch": "retail_and_classic",
+                            "version": "",
+                            "subject": "Pirate's Day",
+                            "action": "запустить событие",
+                            "status": "active",
+                            "effective_date": "",
+                            "scope": [],
+                            "material_facts": [],
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+            return json.dumps(
+                {
+                    "title": "В WoW начался Пиратский день",
+                    "body": "Пиратский день начался в актуальной версии WoW и Classic.",
+                    "hashtag": "события",
+                    "references": [],
+                },
+                ensure_ascii=False,
+            )
+
+        async def aclose(self) -> None:
+            return None
+
+    result = await AppServerContentAI(_CombinedBranchAppServer()).filter_and_rewrite(
+        "Pirate's Day is active in Retail and Classic.",
+        [],
+        [],
+    )
+
+    assert result is not None
+    assert result.fingerprint is not None
+    assert result.fingerprint.game_branch == "retail"
+
+
+@pytest.mark.asyncio
 async def test_luna_propagates_app_server_connectivity_failure() -> None:
     class _UnavailableAppServer:
         async def complete(self, system: str, user: str) -> str:
@@ -349,7 +406,7 @@ async def test_luna_retries_invalid_structured_response_once() -> None:
                 return "not json"
             return json.dumps(
                 {
-                    "is_news": False,
+                    "is_news": False, "news_value": "none",
                     "reason": "Не относится к WoW",
                     "title": "",
                     "body": "",
@@ -388,7 +445,7 @@ async def test_class_changes_require_ability_and_specialization_references() -> 
     app_server = _SequenceAppServer(
         [
             {
-                "is_news": True,
+                "is_news": True, "news_value": "practical",
                 "reason": "Изменение класса",
                 "title": "Друидам изменили лечение",
                 "body": (
@@ -458,7 +515,7 @@ async def test_luna_rejects_accepted_news_without_event_fingerprint() -> None:
         async def complete(self, system: str, user: str) -> str:
             return json.dumps(
                 {
-                    "is_news": True,
+                    "is_news": True, "news_value": "practical",
                     "reason": "Новость",
                     "title": "Изменение рейда",
                     "body": "Босса ослабят.",
@@ -493,7 +550,7 @@ async def test_luna_filter_keeps_only_source_backed_infographic() -> None:
     processor = AppServerContentAI(
         _StubAppServer(
             {
-                "is_news": True,
+                "is_news": True, "news_value": "practical",
                 "reason": "Есть измеримый результат",
                 "title": "Модель ускорила генерацию",
                 "body": "Скорость выросла на 40%.",
@@ -523,7 +580,7 @@ async def test_luna_filter_keeps_only_source_backed_infographic() -> None:
 async def test_luna_news_analysis_uses_full_wow_context_and_hides_source() -> None:
     app_server = _StubAppServer(
         {
-            "is_news": True,
+            "is_news": True, "news_value": "practical",
             "reason": "Важный хотфикс",
             "title": "Blizzard меняет механику миникарты",
             "body": "Хотфикс ограничит подсказки аддонов внутри подземелий.",
@@ -587,7 +644,7 @@ async def test_luna_news_analysis_uses_full_wow_context_and_hides_source() -> No
 async def test_luna_builds_bounded_story_index_and_recent_voice_examples() -> None:
     app_server = _StubAppServer(
         {
-            "is_news": True,
+            "is_news": True, "news_value": "practical",
             "reason": "Новый факт",
             "title": "Blizzard изменила награду события",
             "body": "Игроки будут получать дополнительную монету раз в день.",
@@ -627,7 +684,7 @@ async def test_luna_repairs_dense_presentation_before_publication() -> None:
     app_server = _SequenceAppServer(
         [
             {
-                "is_news": True,
+                "is_news": True, "news_value": "practical",
                 "reason": "Новый факт",
                 "title": "Blizzard изменила награду события",
                 "body": long_body,
@@ -662,7 +719,7 @@ async def test_luna_splits_a_valid_repair_into_readable_paragraphs() -> None:
     app_server = _SequenceAppServer(
         [
             {
-                "is_news": True,
+                "is_news": True, "news_value": "practical",
                 "reason": "Событие началось",
                 "title": "Началось еженедельное событие",
                 "body": "Важно отметить, что событие уже началось.",
@@ -690,7 +747,7 @@ async def test_luna_explains_retail_for_legacy_timewalking_news() -> None:
     app_server = _SequenceAppServer(
         [
             {
-                "is_news": True,
+                "is_news": True, "news_value": "practical",
                 "reason": "Событие началось",
                 "title": "В Cataclysm началась неделя путешествий во времени",
                 "body": "Игрокам доступны старые подземелья и награды.",
@@ -718,7 +775,7 @@ async def test_luna_normalizes_mage_mistranslation_before_publication() -> None:
     processor = AppServerContentAI(
         _StubAppServer(
             {
-                "is_news": True,
+                "is_news": True, "news_value": "practical",
                 "reason": "Новая вступительная сцена",
                 "title": "У паладина и колдуна общая сцена",
                 "body": "Нежить-паладин и нежить-колдун получают одно вступление.",
@@ -741,7 +798,7 @@ async def test_luna_keeps_ptr_instead_of_test_server_wording() -> None:
     processor = AppServerContentAI(
         _StubAppServer(
             {
-                "is_news": True,
+                "is_news": True, "news_value": "practical",
                 "reason": "Обновление проверки",
                 "title": "Изменения появились в тестовом игровом мире",
                 "body": "Игроки могут проверить новые механики на тестовом сервере.",
@@ -764,7 +821,7 @@ async def test_luna_repairs_untranslated_raid_terms_before_publication() -> None
     app_server = _SequenceAppServer(
         [
             {
-                "is_news": True,
+                "is_news": True, "news_value": "practical",
                 "reason": "Ослабление рейда",
                 "title": "В Ядовитой Бездне ослабят механики",
                 "body": "У Сзорака способность Caustic Claws больше не создаёт едкую лужу.",
@@ -811,7 +868,7 @@ async def test_luna_preserves_official_expansion_name_and_reference() -> None:
     processor = AppServerContentAI(
         _StubAppServer(
             {
-                "is_news": True,
+                "is_news": True, "news_value": "practical",
                 "reason": "Комментарий разработчиков",
                 "title": "Последний Титан не завершит все истории WoW",
                 "body": "Последний Титан завершит Сагу души мира, но не каждую историю.",
@@ -843,11 +900,11 @@ async def test_luna_preserves_official_expansion_name_and_reference() -> None:
 
 
 @pytest.mark.asyncio
-async def test_luna_rejects_named_raid_when_reference_query_is_invented() -> None:
+async def test_luna_publishes_after_one_failed_optional_reference_repair() -> None:
     processor = AppServerContentAI(
         _StubAppServer(
             {
-                "is_news": True,
+                "is_news": True, "news_value": "practical",
                 "reason": "Ослабление рейда",
                 "title": "В Ядовитой Бездне ослабят боссов",
                 "body": "Изменения упростят прохождение.",
@@ -863,8 +920,10 @@ async def test_luna_rejects_named_raid_when_reference_query_is_invented() -> Non
         ),
     )
 
-    with pytest.raises(InvalidAIResponseError, match="редакционную проверку"):
-        await processor.filter_and_rewrite("Venomous Abyss raid tuning", [], [])
+    result = await processor.filter_and_rewrite("Venomous Abyss raid tuning", [], [])
+
+    assert result is not None
+    assert result.title == "В Ядовитой Бездне ослабят боссов"
 
 
 @pytest.mark.asyncio
@@ -872,7 +931,7 @@ async def test_luna_returns_typed_warcraft_entities_without_accepting_ids() -> N
     processor = AppServerContentAI(
         _StubAppServer(
             {
-                "is_news": True,
+                "is_news": True, "news_value": "practical",
                 "reason": "Изменение способности",
                 "title": "В Classic усилят Огненный шар",
                 "body": "Урон способности повысится.",
@@ -918,7 +977,7 @@ async def test_luna_returns_typed_warcraft_entities_without_accepting_ids() -> N
 async def test_luna_uses_reddit_editorial_policy_for_community_topics() -> None:
     app_server = _StubAppServer(
         {
-            "is_news": True,
+            "is_news": True, "news_value": "practical",
             "reason": "Практический совет для игроков",
             "title": "Игроки нашли короткий маршрут",
             "body": "Маршрут позволяет пропустить две опасные группы противников.",
@@ -941,7 +1000,7 @@ async def test_luna_uses_reddit_editorial_policy_for_community_topics() -> None:
 async def test_luna_uses_x_editorial_policy_for_social_topics() -> None:
     app_server = _StubAppServer(
         {
-            "is_news": True,
+            "is_news": True, "news_value": "practical",
             "reason": "Полезное наблюдение игроков",
             "title": "Игроки уточнили работу механики",
             "body": "Наблюдение стоит учитывать перед прохождением подземелья.",
@@ -964,7 +1023,7 @@ async def test_luna_repairs_ai_sounding_editorial_cliches_before_publication() -
     app_server = _SequenceAppServer(
         [
             {
-                "is_news": True,
+                "is_news": True, "news_value": "practical",
                 "reason": "Изменение баланса",
                 "title": "Blizzard ослабила урон босса",
                 "body": (
@@ -995,7 +1054,7 @@ async def test_luna_retries_editorial_repair_with_remaining_issues() -> None:
     app_server = _SequenceAppServer(
         [
             {
-                "is_news": True,
+                "is_news": True, "news_value": "practical",
                 "reason": "Изменились награды",
                 "title": "Blizzard изменила награды",
                 "body": "Важно отметить, что награды станут лучше.",
@@ -1035,7 +1094,7 @@ async def test_luna_repairs_ambiguous_specializations_and_adds_raid_reference() 
     app_server = _SequenceAppServer(
         [
             {
-                "is_news": True,
+                "is_news": True, "news_value": "practical",
                 "reason": "Изменился рейтинг специализаций",
                 "title": "Усиление вошло в десятку рейтинга урона",
                 "body": (
@@ -1102,7 +1161,7 @@ async def test_luna_repairs_named_raid_post_without_reference() -> None:
     app_server = _SequenceAppServer(
         [
             {
-                "is_news": True,
+                "is_news": True, "news_value": "practical",
                 "reason": "Новая статистика рейда",
                 "title": "Рейтинг урона в Ядовитой Бездне изменился",
                 "body": "В героическом режиме сменился лидер.",
@@ -1138,11 +1197,76 @@ async def test_luna_repairs_named_raid_post_without_reference() -> None:
 
 
 @pytest.mark.asyncio
+async def test_luna_allows_a_third_repair_for_branch_context_and_raid_reference() -> None:
+    source = "Cataclysm Classic raid Blackwing Descent receives encounter changes."
+    app_server = _SequenceAppServer(
+        [
+            {
+                "is_news": True, "news_value": "practical",
+                "reason": "Правки рейда",
+                "title": "В Чернокрылом логове изменят бой",
+                "body": "Изменения затронут одну из встреч.",
+                "hashtag": "новости",
+                "references": [],
+                "fingerprint": {
+                    "game_branch": "classic",
+                    "version": "Cataclysm Classic",
+                    "subject": "Blackwing Descent",
+                    "action": "изменить",
+                    "status": "announced",
+                    "effective_date": "",
+                    "scope": [],
+                    "material_facts": [],
+                },
+            },
+            {
+                "title": "В Чернокрылом логове изменят бой",
+                "body": "Изменения затронут одну из встреч.",
+                "hashtag": "новости",
+                "references": [],
+            },
+            {
+                "title": "В Чернокрылом логове изменят бой",
+                "body": "Изменения затронут одну из встреч.",
+                "hashtag": "новости",
+                "references": [],
+            },
+            {
+                "title": "В Чернокрылом логове изменят бой",
+                "body": "Изменения затронут одну из встреч.",
+                "hashtag": "новости",
+                "references": [],
+            },
+            {
+                "title": "В Чернокрылом логове изменят бой",
+                "body": "В Cataclysm Classic изменения затронут одну из встреч.",
+                "hashtag": "новости",
+                "references": [
+                    {
+                        "label": "Чернокрылом логове",
+                        "query": "Blackwing Descent",
+                        "kind": "raid",
+                    },
+                ],
+            },
+        ],
+    )
+
+    result = await AppServerContentAI(app_server).filter_and_rewrite(source, [], [])
+
+    assert result is not None
+    assert "Cataclysm Classic" in result.body
+    assert [(reference.query, reference.kind) for reference in result.references] == [
+        ("Blackwing Descent", "raid"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_luna_requires_raid_reference_even_when_boss_reference_exists() -> None:
     app_server = _SequenceAppServer(
         [
             {
-                "is_news": True,
+                "is_news": True, "news_value": "practical",
                 "reason": "Ослабление рейда",
                 "title": "В Ядовитой Бездне ослабят Сзорака",
                 "body": "Бой с Сзораком станет проще.",
@@ -1188,7 +1312,7 @@ async def test_luna_repairs_ranking_post_without_specialization_references() -> 
     app_server = _SequenceAppServer(
         [
             {
-                "is_news": True,
+                "is_news": True, "news_value": "practical",
                 "reason": "Изменился рейтинг специализаций",
                 "title": "Насыщатель поднялся на семь мест",
                 "body": (

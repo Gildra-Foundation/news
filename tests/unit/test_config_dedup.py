@@ -7,6 +7,7 @@ from gildranews import config
 
 def test_load_reads_recent_post_context_limits(monkeypatch) -> None:
     monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("AI_PROVIDER", "app_server")
     monkeypatch.setenv("TARGET_CHANNEL", "@channel")
     monkeypatch.setenv("DEDUP_CONTEXT_HOURS", "72")
     monkeypatch.setenv("DEDUP_CONTEXT_LIMIT", "25")
@@ -23,6 +24,7 @@ def test_load_reads_recent_post_context_limits(monkeypatch) -> None:
 )
 def test_load_rejects_unbounded_recent_post_context(monkeypatch, key, value) -> None:
     monkeypatch.setenv("BOT_TOKEN", "token")
+    monkeypatch.setenv("AI_PROVIDER", "app_server")
     monkeypatch.setenv("TARGET_CHANNEL", "@channel")
     monkeypatch.setenv(key, value)
 

@@ -142,3 +142,36 @@ async def counts() -> dict[str, int]:
             if status in result:
                 result[status] = int(count)
     return result
+
+
+async def failed(*, limit: int = 10) -> list[dict]:
+    db = await sqlite._get_conn()
+    async with db.execute(
+        """SELECT id, source, external_id, attempts, last_error, updated_at
+           FROM processing_retries WHERE status='failed'
+           ORDER BY updated_at DESC, id DESC LIMIT ?""",
+        (max(1, min(limit, 50)),),
+    ) as cursor:
+        rows = await cursor.fetchall()
+    keys = ("id", "source", "external_id", "attempts", "last_error", "updated_at")
+    return [dict(zip(keys, row, strict=True)) for row in rows]
+
+
+async def requeue_failed(
+    retry_id: int,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    db = await sqlite._get_conn()
+    current = _utc_now(now)
+    now_ts = int(current.timestamp())
+    expires_at = int((current + timedelta(hours=24)).timestamp())
+    cursor = await db.execute(
+        """UPDATE processing_retries
+           SET status='pending', attempts=1, next_retry_at=?, expires_at=?,
+               updated_at=CURRENT_TIMESTAMP
+           WHERE id=? AND status='failed'""",
+        (now_ts, expires_at, retry_id),
+    )
+    await db.commit()
+    return cursor.rowcount > 0

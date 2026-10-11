@@ -9,6 +9,32 @@ from gildranews.jobs import scheduler
 from gildranews.jobs.scheduler import ScheduledJobs, find_orphan_screenshots
 
 
+@pytest.mark.asyncio
+async def test_heartbeat_records_scheduler_liveness(monkeypatch) -> None:
+    cfg = Config(
+        tg_api_id=0,
+        tg_api_hash="",
+        bot_token="token",
+        target_channel="@channel",
+        admin_user_id=1,
+        gemini_api_key="",
+        gemini_model="model",
+        lookback_minutes=45,
+        interval_minutes=30,
+        max_posts_per_run=3,
+    )
+    recorded = []
+
+    async def set_service_state(key, value, detail="") -> None:
+        recorded.append((key, value, detail))
+
+    monkeypatch.setattr(scheduler.db, "set_service_state", set_service_state)
+
+    await ScheduledJobs(None, object(), cfg, object(), object()).heartbeat()
+
+    assert recorded == [("scheduler_heartbeat", "healthy", "")]
+
+
 def test_find_orphan_screenshots_ignores_active_and_unrelated_files(tmp_path) -> None:
     active = tmp_path / "draft_1.png"
     orphan = tmp_path / "draft_2.png"
@@ -57,10 +83,11 @@ def test_start_skips_telegram_pipeline_without_reader() -> None:
     assert scheduled == [
         "rss_pipeline",
         "processing_retry",
+        "scheduler_heartbeat",
         "db_cleanup",
         "weekly_digest",
     ]
-    assert startup == ["retry_processing", "run_rss_pipeline", "cleanup"]
+    assert startup == ["heartbeat", "retry_processing", "run_rss_pipeline", "cleanup"]
 
 
 def test_start_schedules_reddit_and_x_topics_morning_and_evening() -> None:

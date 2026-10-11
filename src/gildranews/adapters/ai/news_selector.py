@@ -41,6 +41,7 @@ class _Answers(BaseModel):
     has_substance: _NoulAnswer
     branch: _ChoiceAnswer
     information_status: _ChoiceAnswer
+    rejection_reason: _ChoiceAnswer
 
 
 class _Usage(BaseModel):
@@ -64,11 +65,34 @@ class SelectionDecision:
     has_substance: float
     branch: str
     information_status: str
+    rejection_reason: str
     model: str
     cost: float = 0
 
     def confidently_rejects(self, minimum_confidence: float) -> bool:
         return self.choice == "reject" and self.confidence >= minimum_confidence
+
+    def blocking_reason(self, minimum_confidence: float) -> str:
+        if not self.confidently_rejects(minimum_confidence):
+            return ""
+        if self.rejection_reason == "not_wow" and self.wow_relevance <= 0.4:
+            return "not_wow"
+        if (
+            self.rejection_reason
+            in {"no_new_information", "opinion_only", "speculation_only"}
+            and self.has_substance <= 0.4
+        ):
+            return "low_substance"
+        if self.rejection_reason == "promotional" and self.has_substance <= 0.6:
+            return "promotional"
+        if self.wow_relevance <= 0.2:
+            return "not_wow"
+        if (
+            self.has_substance <= 0.2
+            and self.information_status in {"opinion", "speculation"}
+        ):
+            return "low_substance"
+        return ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,11 +111,29 @@ class SelectionAuditRecord:
     threshold: float
     shadow_mode: bool
     blocked: bool
-    prompt_version: str = "typesafe-selection-v1"
+    block_reason: str = ""
+    rejection_reason: str = "unknown"
+    review_sampled: bool = False
+    prompt_version: str = "typesafe-selection-v2"
     error: str = ""
 
 
 SelectionAuditRecorder = Callable[[SelectionAuditRecord], Awaitable[None]]
+SelectionOutcomeRecorder = Callable[[str, str, str], Awaitable[None]]
+
+
+def _blocked_reason_text(decision: SelectionDecision, block_reason: str) -> str:
+    if block_reason == "not_wow":
+        return (
+            "TypeSafe: материал не относится к World of Warcraft "
+            f"(релевантность {decision.wow_relevance:.0%})"
+        )
+    if block_reason == "low_substance":
+        return (
+            "TypeSafe: недостаточно конкретных фактов для отдельной новости "
+            f"(содержательность {decision.has_substance:.0%})"
+        )
+    return "TypeSafe: рекламный материал без достаточной новостной ценности"
 
 
 def _questions(content_kind: str) -> dict[str, dict[str, object]]:
@@ -109,7 +151,14 @@ def _questions(content_kind: str) -> dict[str, dict[str, object]]:
     return {
         "publication_fit": {
             "type": "choice",
-            "instructions": "Should this item enter a curated World of Warcraft publication pipeline?",
+            "instructions": (
+                "Should this item enter a curated World of Warcraft publication pipeline? "
+                "Judge concrete new facts and player value, not excitement, popularity or "
+                "the publisher's reputation. A patch, official expansion announcement, "
+                "availability deadline or new reward with acquisition details is valuable. "
+                "Routine roundups, repeated previews and affiliate offers are not. "
+                "PTR and datamined discoveries can be valuable but are not live changes."
+            ),
             "criteria": {
                 "accept": accept_description,
                 "reject": reject_description,
@@ -144,6 +193,22 @@ def _questions(content_kind: str) -> dict[str, dict[str, object]]:
                 "reported": "A factual report or discovery supported by direct evidence.",
                 "speculation": "An unconfirmed interpretation, rumor, or prediction.",
                 "opinion": "Primarily personal opinion or open-ended discussion.",
+            },
+        },
+        "rejection_reason": {
+            "type": "choice",
+            "instructions": (
+                "What is the single strongest reason to keep this item out of a curated "
+                "World of Warcraft news channel? Choose publishable when it has enough "
+                "clear value to let the main editor decide."
+            ),
+            "criteria": {
+                "publishable": "Relevant and substantive enough for the main editor.",
+                "not_wow": "Not specifically about World of Warcraft.",
+                "no_new_information": "No concrete new fact, useful finding, or clear topic.",
+                "promotional": "Primarily advertising, recruitment, or self-promotion.",
+                "opinion_only": "Only personal opinion without a concrete useful topic.",
+                "speculation_only": "Only rumor or prediction without direct evidence.",
             },
         },
     }
@@ -216,6 +281,7 @@ class OpenRouterNewsSelector:
             has_substance=parsed.answers.has_substance.noul,
             branch=parsed.answers.branch.choice,
             information_status=parsed.answers.information_status.choice,
+            rejection_reason=parsed.answers.rejection_reason.choice,
             model=parsed.model,
             cost=parsed.usage.cost,
         )
@@ -236,12 +302,16 @@ class ClassifiedContentAI:
         min_reject_confidence: float,
         shadow_mode: bool,
         audit_recorder: SelectionAuditRecorder | None = None,
+        outcome_recorder: SelectionOutcomeRecorder | None = None,
+        review_sample_rate: float = 0,
     ) -> None:
         self._delegate = delegate
         self._selector = selector
         self._min_reject_confidence = min_reject_confidence
         self._shadow_mode = shadow_mode
         self._audit_recorder = audit_recorder
+        self._outcome_recorder = outcome_recorder
+        self._review_sample_rate = review_sample_rate
 
     async def _record_audit(self, record: SelectionAuditRecord) -> None:
         if self._audit_recorder is None:
@@ -251,6 +321,19 @@ class ClassifiedContentAI:
         except Exception:
             log.warning("news_selector_audit_failed", exc_info=True)
 
+    async def _record_outcome(
+        self,
+        content_sha256: str,
+        content_kind: str,
+        outcome: str,
+    ) -> None:
+        if self._outcome_recorder is None:
+            return
+        try:
+            await self._outcome_recorder(content_sha256, content_kind, outcome)
+        except Exception:
+            log.warning("news_selector_outcome_audit_failed", exc_info=True)
+
     async def filter_and_rewrite(
         self,
         text,
@@ -258,13 +341,15 @@ class ClassifiedContentAI:
         emoji_themes,
         content_kind="news",
     ):
+        content_sha256 = hashlib.sha256(text.encode()).hexdigest()
+        review_sampled = False
         try:
             decision = await self._selector.classify(text, content_kind)
         except Exception as exc:
             log.warning("news_selector_failed fallback=luna", exc_info=True)
             await self._record_audit(
                 SelectionAuditRecord(
-                    content_sha256=hashlib.sha256(text.encode()).hexdigest(),
+                    content_sha256=content_sha256,
                     content_kind=content_kind,
                     choice="error",
                     confidence=0,
@@ -282,25 +367,34 @@ class ClassifiedContentAI:
                 )
             )
         else:
+            block_reason = decision.blocking_reason(
+                self._min_reject_confidence,
+            )
             log.info(
                 "news_selector_decision choice=%s confidence=%.3f relevance=%.3f "
-                "substance=%.3f branch=%s status=%s model=%s cost=%.8f shadow=%s",
+                "substance=%.3f branch=%s status=%s rejection_reason=%s "
+                "block_reason=%s model=%s cost=%.8f shadow=%s",
                 decision.choice,
                 decision.confidence,
                 decision.wow_relevance,
                 decision.has_substance,
                 decision.branch,
                 decision.information_status,
+                decision.rejection_reason,
+                block_reason or "none",
                 decision.model,
                 decision.cost,
                 self._shadow_mode,
             )
-            blocked = not self._shadow_mode and decision.confidently_rejects(
-                self._min_reject_confidence,
+            review_sampled = (
+                not self._shadow_mode
+                and bool(block_reason)
+                and int(content_sha256[:16], 16) / 16**16 < self._review_sample_rate
             )
+            blocked = not self._shadow_mode and bool(block_reason) and not review_sampled
             await self._record_audit(
                 SelectionAuditRecord(
-                    content_sha256=hashlib.sha256(text.encode()).hexdigest(),
+                    content_sha256=content_sha256,
                     content_kind=content_kind,
                     choice=decision.choice,
                     confidence=decision.confidence,
@@ -314,22 +408,46 @@ class ClassifiedContentAI:
                     threshold=self._min_reject_confidence,
                     shadow_mode=self._shadow_mode,
                     blocked=blocked,
+                    block_reason=block_reason,
+                    rejection_reason=decision.rejection_reason,
+                    review_sampled=review_sampled,
                 )
             )
             if blocked:
+                await self._record_outcome(
+                    content_sha256,
+                    content_kind,
+                    "typesafe_blocked",
+                )
                 return FilterResult(
                     is_news=False,
-                    reason=(
-                        "TypeSafe: материал уверенно не прошёл предварительный отбор "
-                        f"({decision.confidence:.0%})"
-                    ),
+                    reason=_blocked_reason_text(decision, block_reason),
                 )
-        return await self._delegate.filter_and_rewrite(
-            text,
-            recent_posts,
-            emoji_themes,
-            content_kind,
-        )
+        try:
+            result = await self._delegate.filter_and_rewrite(
+                text,
+                recent_posts,
+                emoji_themes,
+                content_kind,
+            )
+        except Exception:
+            await self._record_outcome(content_sha256, content_kind, "luna_error")
+            raise
+        outcome = "luna_no_result"
+        if result is not None:
+            outcome = "luna_accepted" if result.is_news else "luna_filtered"
+        if review_sampled and result is not None and result.is_news:
+            outcome = "luna_would_accept"
+        await self._record_outcome(content_sha256, content_kind, outcome)
+        if review_sampled and result is not None and result.is_news:
+            return FilterResult(
+                is_news=False,
+                reason=(
+                    "TypeSafe: материал оставлен в контрольной выборке; "
+                    "Luna сочла его новостью"
+                ),
+            )
+        return result
 
     async def translate(self, source_text, edit_instruction=None):
         return await self._delegate.translate(source_text, edit_instruction)
@@ -342,6 +460,9 @@ class ClassifiedContentAI:
 
     async def make_weekly_digest(self, posts):
         return await self._delegate.make_weekly_digest(posts)
+
+    async def make_website_article(self, source_text: str):
+        return await self._delegate.make_website_article(source_text)
 
     async def aclose(self) -> None:
         try:

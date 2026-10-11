@@ -7,6 +7,7 @@ import tempfile
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from time import monotonic
 
 from aiogram import Bot
 
@@ -14,7 +15,7 @@ from gildranews.adapters import media as media_downloader
 from gildranews.adapters.emoji import catalog as emoji_store
 from gildranews.adapters.media import scrape_do_images
 from gildranews.adapters.persistence import processing_retries as retry_store
-from gildranews.adapters.persistence import publication_guard
+from gildranews.adapters.persistence import publication_guard, site_news
 from gildranews.adapters.persistence import sqlite as db
 from gildranews.adapters.publishing import telegram as tg_writer
 from gildranews.adapters.references import wowhead as wowhead_references
@@ -317,6 +318,14 @@ async def process_item(
             source_url=item.article_url,
         )
 
+    website_kwargs = {}
+    if cfg.website_news_enabled:
+        try:
+            website_kwargs["website_source"] = site_news.source_payload(
+                item.ai_text, item.article_url, item.published_at.isoformat(), analysis.fingerprint,
+            )
+        except ValueError:
+            log.warning("Website source has no usable URL; skipping website enqueue")
     try:
         reservation = await publication_guard.reserve_publication(
             item.source,
@@ -508,6 +517,7 @@ async def process_item(
         title=analysis.title,
         body=analysis.body,
         target_message_id=target_message_id,
+        **website_kwargs,
     )
     return ProcessResult(
         "published", item.source, item.external_id,
@@ -589,6 +599,7 @@ async def run_once(
     on_result: ResultCallback | None = None,
     now: datetime | None = None,
 ) -> dict[str, int | str | None]:
+    started_at = monotonic()
     current_time = (now or datetime.now(UTC)).astimezone(UTC)
     cutoff = current_time - timedelta(minutes=cfg.lookback_minutes)
     candidates: list[rss_source.RSSItem] = []
@@ -607,7 +618,7 @@ async def run_once(
             if cutoff <= item.published_at <= current_time
         )
 
-    candidates.sort(key=lambda item: item.published_at)
+    candidates.sort(key=lambda item: item.published_at, reverse=True)
     selected = 0
     published = 0
     for item in candidates:
@@ -629,7 +640,14 @@ async def run_once(
                 log.exception("RSS on_result callback failed")
 
     error = "; ".join(errors) or None
-    await db.record_run(len(candidates), selected, published, error)
+    await db.record_run(
+        len(candidates),
+        selected,
+        published,
+        error,
+        pipeline="rss",
+        duration_ms=round((monotonic() - started_at) * 1000),
+    )
     return {
         "fetched": len(candidates),
         "selected": selected,

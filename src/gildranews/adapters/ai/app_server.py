@@ -90,7 +90,7 @@ class AppServerClient:
         self,
         endpoint: str,
         token: str,
-        model: str = "gpt-5.6-luna",
+        model: str = "gpt-6-luna",
         reasoning_effort: str = "xhigh",
         timeout_seconds: float = 240,
         http_client: httpx.AsyncClient | None = None,

@@ -75,7 +75,11 @@ async def run_bot() -> None:
 
     bot = tg_writer.make_bot(cfg.bot_token)
     dp = tg_writer.make_dispatcher(cfg.admin_user_id, cfg.target_channel)
-    content_ai = build_content_ai(cfg, selector_audit=db.record_news_selector_decision)
+    content_ai = build_content_ai(
+        cfg,
+        selector_audit=db.record_news_selector_decision,
+        selector_outcome=db.record_news_selector_outcome,
+    )
     _notify_admin = partial(notify_admin, bot, cfg)
 
     mtproto_client = None
@@ -221,7 +225,8 @@ async def run_bot() -> None:
 
         await message.answer(
             f"Беру пост https://t.me/{used}/{post.message_id} "
-            f"(медиа: {len(post.media_messages)}), рерайт через {cfg.app_server_model if cfg.ai_provider == 'app_server' else cfg.gemini_model}…"
+            f"(медиа: {len(post.media_messages)}), рерайт через "
+            f"{cfg.anthropic_model if cfg.ai_provider == 'anthropic' else cfg.app_server_model if cfg.ai_provider == 'app_server' else cfg.gemini_model}…"
         )
 
         try:

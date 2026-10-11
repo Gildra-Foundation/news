@@ -69,7 +69,8 @@ class RaidNewsAI:
 
 
 @pytest.mark.asyncio
-async def test_process_rss_item_publishes_without_source_attribution(monkeypatch) -> None:
+@pytest.mark.parametrize("website_enabled", [False, True])
+async def test_process_rss_item_publishes_without_source_attribution(monkeypatch, website_enabled) -> None:
     published: dict = {}
     recorded: dict = {}
 
@@ -112,7 +113,7 @@ async def test_process_rss_item_publishes_without_source_attribution(monkeypatch
         return PublicationReservation(True, 1)
 
     async def complete_publication(
-        _reservation_id, *, channel, message_id, title, body, target_message_id,
+        _reservation_id, *, channel, message_id, title, body, target_message_id, website_source=None,
     ) -> None:
         recorded.update(
             channel=channel,
@@ -121,6 +122,12 @@ async def test_process_rss_item_publishes_without_source_attribution(monkeypatch
             body=body,
             target_message_id=target_message_id,
         )
+        if website_enabled:
+            assert website_source["text"] == item.ai_text
+            assert website_source["url"] == item.article_url
+            assert website_source["source_published_at"] == item.published_at.isoformat()
+        else:
+            assert website_source is None
 
     monkeypatch.setattr(process_rss.db, "claim_message", claim_message)
     monkeypatch.setattr(process_rss.db, "recent_published_context", recent_context)
@@ -143,6 +150,7 @@ async def test_process_rss_item_publishes_without_source_attribution(monkeypatch
         lookback_minutes=120,
         interval_minutes=30,
         max_posts_per_run=3,
+        website_news_enabled=website_enabled,
     )
     item = RSSItem(
         source="wowhead",
@@ -652,7 +660,9 @@ async def test_run_once_processes_only_items_inside_lookback(monkeypatch) -> Non
             "published", "wowhead", kwargs["item"].external_id,
         )
 
-    async def record_run(fetched, selected, published, error) -> None:
+    async def record_run(fetched, selected, published, error, **metrics) -> None:
+        assert metrics["pipeline"] == "rss"
+        assert metrics["duration_ms"] >= 0
         runs.append((fetched, selected, published, error))
 
     monkeypatch.setattr(process_rss.rss_source, "fetch_feed", fetch_feed)
@@ -683,6 +693,60 @@ async def test_run_once_processes_only_items_inside_lookback(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
+async def test_run_once_processes_freshest_candidates_first(monkeypatch) -> None:
+    now = datetime(2026, 9, 20, 16, 0, tzinfo=UTC)
+    older = RSSItem(
+        source="wowhead",
+        external_id=1,
+        title="Older",
+        content="Older article body",
+        published_at=now - timedelta(minutes=30),
+    )
+    newer = RSSItem(
+        source="icy-veins",
+        external_id=2,
+        title="Newer",
+        content="Newer article body",
+        published_at=now - timedelta(minutes=5),
+    )
+    processed: list[int] = []
+
+    async def fetch_feed(url: str, *, source: str):
+        return [older] if source == "wowhead" else [newer]
+
+    async def process_item(**kwargs):
+        processed.append(kwargs["item"].external_id)
+        return process_rss.ProcessResult(
+            "published", kwargs["item"].source, kwargs["item"].external_id,
+        )
+
+    async def record_run(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(process_rss.rss_source, "fetch_feed", fetch_feed)
+    monkeypatch.setattr(process_rss, "process_item", process_item)
+    monkeypatch.setattr(process_rss.db, "record_run", record_run)
+
+    cfg = Config(
+        tg_api_id=0,
+        tg_api_hash="",
+        bot_token="token",
+        target_channel="@gildrawow",
+        admin_user_id=1,
+        gemini_api_key="",
+        gemini_model="model",
+        lookback_minutes=45,
+        interval_minutes=30,
+        max_posts_per_run=1,
+        rss_feed_urls=("https://www.wowhead.com/news/rss/all", "https://www.icy-veins.com/rss/news"),
+    )
+
+    await process_rss.run_once(bot=object(), cfg=cfg, content_ai=object(), now=now)
+
+    assert processed == [2]
+
+
+@pytest.mark.asyncio
 async def test_run_once_records_processing_failure_in_run_history(monkeypatch) -> None:
     now = datetime(2026, 9, 16, 16, 0, tzinfo=UTC)
     item = RSSItem(
@@ -706,7 +770,9 @@ async def test_run_once_records_processing_failure_in_run_history(monkeypatch) -
             reason="InvalidAIResponseError: malformed JSON",
         )
 
-    async def record_run(fetched, selected, published, error) -> None:
+    async def record_run(fetched, selected, published, error, **metrics) -> None:
+        assert metrics["pipeline"] == "rss"
+        assert metrics["duration_ms"] >= 0
         runs.append((fetched, selected, published, error))
 
     monkeypatch.setattr(process_rss.rss_source, "fetch_feed", fetch_feed)

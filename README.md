@@ -2,10 +2,10 @@
 
 # ⚔️ GildraNews
 
-### Автономная редакция новостей World of Warcraft для Telegram
+### Автономная редакция новостей World of Warcraft для Telegram и сайта
 
 Собирает материалы из RSS, Reddit и X, отбирает полезные темы через TypeSafe,
-проверяет факты и готовит русский текст через GPT-5.6 Luna, защищается от
+проверяет факты и готовит русский текст через Claude Sonnet 5.5 по официальному API, защищается от
 повторов и публикует посты с подходящими медиа и игровыми Custom Emoji.
 
 <br>
@@ -13,7 +13,7 @@
 [![Python](https://img.shields.io/badge/python-3.12-blue.svg?logo=python&logoColor=white)](https://www.python.org)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://www.docker.com)
 [![aiogram](https://img.shields.io/badge/aiogram-3.x-009999?logo=telegram&logoColor=white)](https://aiogram.dev)
-[![Luna](https://img.shields.io/badge/GPT--5.6-Luna-412991?logo=openai&logoColor=white)](https://openai.com)
+[![Claude](https://img.shields.io/badge/Claude-Sonnet_5.5-d97757)](https://platform.claude.com/docs/en/models/overview)
 [![TypeSafe](https://img.shields.io/badge/TypeSafe-Jev-334155)](https://docs.typesafe.ai/introduction)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](#-лицензия)
 
@@ -43,7 +43,7 @@
 |---|---|
 | **📡 Источники** | Wowhead RSS, Icy Veins RSS, RedditAPIs, GetXAPI и ручные ссылки |
 | **🧠 Дешёвый отбор** | TypeSafe Jev классифицирует полезность, ветку WoW и статус информации до дорогой обработки |
-| **🧾 Карта фактов** | Luna сначала выделяет подтверждающие цитаты и отпечаток события, а затем отдельным запросом пишет пост |
+| **🧾 Карта фактов** | Sonnet выделяет точные цитаты и отпечаток события; пустая или выдуманная основная цитата блокирует черновик |
 | **✍️ Русская редактура** | Простые фразы, контроль терминов WoW, чисел, версий, отрицаний, PTR и названий дополнений |
 | **🚫 Защита от дублей** | SQLite хранит `story_key` и `revision_key`; разные источники одного сюжета дают одну публикацию |
 | **🖼️ Медиа** | Оригинальные изображения и видео, SVG-инфографика и безопасный тематический fallback |
@@ -60,8 +60,8 @@
 flowchart LR
     SRC["RSS / Reddit / X / ручная ссылка"] --> C["Candidate"]
     C --> J["TypeSafe Jev<br/>предварительный отбор"]
-    J --> F["Luna<br/>карта фактов"]
-    F --> D["Luna<br/>русский черновик"]
+    J --> F["Sonnet 5.5<br/>карта фактов"]
+    F --> D["Sonnet 5.5<br/>русский черновик"]
     D --> Q["Редакторские проверки"]
     Q --> U["story_key / revision_key"]
     U --> M["Медиа и Warcraft Emoji"]
@@ -76,19 +76,19 @@ flowchart LR
 sequenceDiagram
     participant Src as Источник
     participant Sel as TypeSafe
-    participant Luna as App Server / Luna
+    participant AI as Official Claude API / Sonnet 5.5
     participant DB as SQLite
     participant Bot as Bot API
     participant CH as Канал
 
     Src->>Sel: кандидат
     Sel->>DB: решение, уверенность, модель, стоимость
-    Sel->>Luna: прошедший кандидат
-    Luna->>Luna: этап 1 — факты и fingerprint
-    Luna->>Luna: этап 2 — публичный текст
-    Luna->>DB: резервирование story_key + revision_key
-    DB-->>Luna: новый сюжет или важное развитие
-    Luna->>Bot: текст, медиа, ссылки и Custom Emoji
+    Sel->>AI: прошедший кандидат
+    AI->>AI: этап 1 — факты и fingerprint
+    AI->>AI: этап 2 — публичный текст
+    AI->>DB: резервирование story_key + revision_key
+    DB-->>AI: новый сюжет или важное развитие
+    AI->>Bot: текст, медиа, ссылки и Custom Emoji
     Bot->>CH: Сообщение
     Bot-->>DB: target_message_id и история публикации
 ```
@@ -185,7 +185,9 @@ docker compose up -d --force-recreate
 | `/run` | Прогон поллинга прямо сейчас |
 | `/test [@канал]` | Опубликовать последний пост — для проверки стиля |
 | `/digest` | Собрать и опубликовать недельный дайджест |
-| `/status` | Итоги последнего прогона |
+| `/status` | Последний прогон, длительность, ошибки за 24 часа и heartbeat |
+| `/retries` | Список материалов, остановленных после всех попыток |
+| `/retry_failed ID` | Контролируемо вернуть остановленный материал в очередь |
 | `/emojiid` | Извлечь ID premium-эмодзи из пересланного сообщения |
 | `/emojis` | Состояние Warcraft Custom Emoji и Fragment-интеграции |
 | `/emoji_retry ID` | Вернуть неудачную загрузку в очередь |
@@ -208,13 +210,13 @@ docker compose up -d --force-recreate
 Бот:
 1. Скачает контент (GetXAPI/RedditAPIs, если явно включены; затем бесплатные
    FxTwitter/Reddit JSON; при блокировке — явно включённый Scrape.do через ParsesUnix)
-2. Проверит факты и подготовит русский текст через App Server с Luna
+2. Проверит факты и подготовит русский текст через выбранный AI-провайдер (по умолчанию Sonnet 5.5)
 3. Отрендерит карточку через Pillow если нет родного фото
 4. Покажет **превью с 4 кнопками**:
 
 | Кнопка | Действие |
 |---|---|
-| ✏️ Редактировать | Бот ждёт текстовую инструкцию, после чего Luna пересоберёт текст |
+| ✏️ Редактировать | Бот ждёт текстовую инструкцию, после чего AI пересоберёт текст |
 | ✅ Опубликовать | Шлёт в канал + пишет в БД для будущего дедупа |
 | 🔗 Оригинал в посте | Toggle: добавить курсивно-подчёркнутую ссылку в финал поста |
 | ❌ Отменить | Удалить черновик и скриншот |
@@ -223,7 +225,7 @@ docker compose up -d --force-recreate
 
 ## 🏷️ Premium-эмодзи
 
-Luna выделяет до трёх сущностей Warcraft: класс, специализацию, заклинание,
+AI выделяет до трёх сущностей Warcraft: класс, специализацию, заклинание,
 предмет, косметику, средство передвижения, рейд, подземелье, босса и другие.
 Бот проверяет точное совпадение и ветку игры, скачивает оригинальную иконку,
 приводит её к статическому WEBP 100×100 и сохраняет созданный
@@ -262,7 +264,7 @@ gantt
 
 Раз в воскресенье в 18:00 UTC бот:
 1. Достаёт все посты с `target_message_id` за последние 7 дней
-2. Шлёт в Luna → структурированный JSON `{intro, sections: [{name, items}]}`
+2. Шлёт в основной AI → структурированный JSON `{intro, sections: [{name, items}]}`
 3. Собирает HTML с кликабельными ссылками вида `https://t.me/gildrawow/<id>`
 4. Публикует **с обложкой** [`assets/digest_cover.jpg`](assets/digest_cover.jpg) и хэштегом `#дайджест@gildrawow`
 
@@ -278,7 +280,7 @@ gantt
 │   ├── domain/                # Общие модели без зависимостей от SDK
 │   ├── application/           # Pipeline, дайджест и контракты внешних компонентов
 │   ├── adapters/
-│   │   ├── ai/                # TypeSafe-отбор и ChatGPT App Server / Luna
+│   │   ├── ai/                # TypeSafe-отбор, Claude API и совместимый App Server
 │   │   ├── sources/           # Telegram, X, Reddit и GitHub
 │   │   ├── publishing/        # Публикация через Telegram Bot API
 │   │   ├── persistence/       # SQLite
@@ -313,6 +315,28 @@ uv pip install --python .venv/bin/python -e '.[dev]'
 
 ---
 
+## Новости для сайта
+
+`WEBSITE_NEWS_ENABLED=true` включает сохранение исходников новых опубликованных новостей
+в SQLite вместе с записью Telegram-публикации. Отдельный процесс `gildranews-news-api`
+готовит из исходника самостоятельную статью: заголовок, лид, развёрнутый текст,
+ключевые факты, источник, версия и статус информации. Генерация не задерживает Telegram.
+
+Sonnet проверяет готовую статью отдельным запросом после редактуры EditorTeam.
+Локальные проверки блокируют неподтверждённые цитаты, новые числа и HTML.
+В API попадают только статьи, прошедшие проверки; внутренние доказательства остаются в базе.
+Очередь переживает перезапуск, имеет ограниченные повторы и защиту от запоздавшего worker.
+
+API доступен backend сайта по Bearer-токену:
+
+- `GET /v1/news?after_id=0&limit=20` — новые статьи, курсор и `has_more`;
+- `GET /v1/news/{id}` — готовая статья;
+- `GET /health` — доступность процесса и базы.
+
+[Контракт API и настройка](docs/news-api.md). Исторические короткие посты автоматически
+не превращаются в статьи: для них нет сохранённого полного исходника. Объём статьи
+зависит от доступных фактов, а не от обязательного количества символов.
+
 ## ⚙️ Конфигурация
 
 ### .env переменные
@@ -325,10 +349,14 @@ BOT_TOKEN=1234:ABCdef...
 TARGET_CHANNEL=@gildrawow
 ADMIN_USER_ID=123456789
 
-# Основной AI-провайдер
-AI_PROVIDER=app_server
+# Основной AI-провайдер: официальный Anthropic Messages API
+AI_PROVIDER=anthropic
+ANTHROPIC_API_KEY_FILE=/app/data/anthropic_api_key
+ANTHROPIC_MODEL=claude-sonnet-5-5
+
+# Совместимость: AI_PROVIDER=app_server использует прежний мост Codex
 APP_SERVER_URL=http://host.docker.internal:4202/ag-ui
-APP_SERVER_MODEL=gpt-5.6-luna
+APP_SERVER_MODEL=gpt-6-luna
 APP_SERVER_REASONING_EFFORT=xhigh
 
 # Предварительный отбор TypeSafe через OpenRouter
@@ -336,6 +364,7 @@ NEWS_SELECTOR_ENABLED=true
 NEWS_SELECTOR_MODEL=typesafe/jev-1.13
 NEWS_SELECTOR_MIN_REJECT_CONFIDENCE=0.90
 NEWS_SELECTOR_SHADOW_MODE=false
+NEWS_SELECTOR_REVIEW_SAMPLE_RATE=0.05
 OPENROUTER_API_KEY_FILE=/app/data/openrouter_api_key
 
 # Опциональные платные маршруты (без enabled=true запросов не будет)
@@ -384,7 +413,7 @@ MTProto, поэтому Premium Emoji сохраняются, а в дату `FO
 |---|---|
 | **Источники** | RSS, RedditAPIs, GetXAPI и ручные ссылки; чтение Telegram по умолчанию выключено |
 | **Публикация и команды** | aiogram 3.x (Bot API) |
-| **AI** | TypeSafe Jev через OpenRouter Decisions API и GPT-5.6 Luna через App Server |
+| **AI** | TypeSafe Jev через OpenRouter Decisions API и Claude Sonnet 5.5 через официальный Anthropic API |
 | **Internet-fetch** | httpx, ParsesUnix/Scrape.do и безопасные адаптеры источников |
 | **Рендер** | Pillow и SVG-шаблоны с поддержкой кириллицы |
 | **Хранилище** | aiosqlite, WAL, версионированные миграции и атомарное резервирование публикаций |

@@ -52,7 +52,7 @@ class EditorClient:
             log.warning("EditorTeam unavailable or returned an invalid response", exc_info=True)
             return text
         if not result.accepted or not result.checks_complete or not result.text.strip():
-            log.info("EditorTeam rejected the candidate; keeping the Luna version")
+            log.info("EditorTeam rejected the candidate; keeping the original version")
             return text
         return result.text.strip()
 

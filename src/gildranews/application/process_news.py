@@ -4,6 +4,7 @@ import asyncio
 import logging
 import tempfile
 from pathlib import Path
+from time import monotonic
 
 from aiogram import Bot
 from telethon import TelegramClient
@@ -36,12 +37,20 @@ async def run_once(
     selected_count = 0
     published = 0
     error: str | None = None
+    started_at = monotonic()
 
     try:
         sources = await db.list_sources()
         if not sources:
             log.info("Источников нет — пропуск прогона")
-            await db.record_run(0, 0, 0, None)
+            await db.record_run(
+                0,
+                0,
+                0,
+                None,
+                pipeline="telegram",
+                duration_ms=round((monotonic() - started_at) * 1000),
+            )
             return {"fetched": 0, "selected": 0, "published": 0}
 
         posts = await tg_reader.fetch_recent(
@@ -79,7 +88,14 @@ async def run_once(
         log.exception("Ошибка в прогоне")
         error = f"{type(e).__name__}: {e}"
 
-    await db.record_run(fetched, selected_count, published, error)
+    await db.record_run(
+        fetched,
+        selected_count,
+        published,
+        error,
+        pipeline="telegram",
+        duration_ms=round((monotonic() - started_at) * 1000),
+    )
     return {"fetched": fetched, "selected": selected_count, "published": published, "error": error}
 
 
@@ -117,6 +133,7 @@ async def process_post(
         processor = news_filter or build_content_ai(
             cfg,
             selector_audit=db.record_news_selector_decision,
+            selector_outcome=db.record_news_selector_outcome,
         )
         filt = await processor.filter_and_rewrite(
             text=post.text,
@@ -191,9 +208,18 @@ async def process_post(
             )
         if target_msg_id:
             log.info("Опубликовано: @%s/%s media=%d → %d", post.channel, post.message_id, len(media), target_msg_id)
+            website_kwargs = {}
+            if cfg.website_news_enabled:
+                from gildranews.adapters.persistence.site_news import source_payload
+
+                website_kwargs["website_source"] = source_payload(
+                    post.text, f"https://t.me/{post.channel.lstrip('@')}/{post.message_id}",
+                    fingerprint=filt.fingerprint,
+                )
             await db.record_published(
                 post.channel, post.message_id, filt.title, filt.body,
                 target_message_id=target_msg_id,
+                **website_kwargs,
             )
             if force:
                 # При force claim не делался — пометим seen вручную, чтобы real-time

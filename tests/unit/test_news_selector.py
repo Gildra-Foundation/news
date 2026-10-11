@@ -65,15 +65,24 @@ class _StubContentAI:
         self.closed = True
 
 
-def _decision(*, choice: str, confidence: float) -> SelectionDecision:
+def _decision(
+    *,
+    choice: str,
+    confidence: float,
+    wow_relevance: float = 0.95,
+    has_substance: float = 0.9,
+    information_status: str = "official",
+    rejection_reason: str = "publishable",
+) -> SelectionDecision:
     return SelectionDecision(
         choice=choice,
         confidence=confidence,
         probabilities={"accept": 0.01, "reject": 0.99},
-        wow_relevance=0.95,
-        has_substance=0.9,
+        wow_relevance=wow_relevance,
+        has_substance=has_substance,
         branch="retail",
-        information_status="official",
+        information_status=information_status,
+        rejection_reason=rejection_reason,
         model="typesafe/jev-1.13-20260917",
     )
 
@@ -121,6 +130,19 @@ async def test_openrouter_selector_uses_decisions_endpoint_and_parses_answers() 
                         },
                         "confidence": 0.82,
                     },
+                    "rejection_reason": {
+                        "type": "choice",
+                        "choice": "publishable",
+                        "probabilities": {
+                            "publishable": 0.92,
+                            "not_wow": 0.02,
+                            "no_new_information": 0.02,
+                            "promotional": 0.01,
+                            "opinion_only": 0.02,
+                            "speculation_only": 0.01,
+                        },
+                        "confidence": 0.92,
+                    },
                 },
                 "usage": {"input_tokens": 350, "output_tokens": 60, "cost": 0.0000147},
             },
@@ -150,6 +172,7 @@ async def test_openrouter_selector_uses_decisions_endpoint_and_parses_answers() 
         "has_substance",
         "branch",
         "information_status",
+        "rejection_reason",
     }
     assert result.choice == "accept"
     assert result.confidence == pytest.approx(0.96)
@@ -162,7 +185,14 @@ async def test_openrouter_selector_uses_decisions_endpoint_and_parses_answers() 
 
 @pytest.mark.asyncio
 async def test_confident_rejection_stops_before_luna() -> None:
-    selector = _StubSelector(_decision(choice="reject", confidence=0.98))
+    selector = _StubSelector(
+        _decision(
+            choice="reject",
+            confidence=0.98,
+            wow_relevance=0.08,
+            rejection_reason="not_wow",
+        ),
+    )
     delegate = _StubContentAI()
     audits = []
 
@@ -181,15 +211,110 @@ async def test_confident_rejection_stops_before_luna() -> None:
 
     assert result is not None
     assert result.is_news is False
-    assert "TypeSafe" in result.reason
+    assert "не относится к World of Warcraft" in result.reason
     assert delegate.filter_calls == 0
     assert len(audits) == 1
     assert audits[0].choice == "reject"
     assert audits[0].blocked is True
+    assert audits[0].block_reason == "not_wow"
     assert audits[0].content_sha256 == (
         "dda18a0e21ae47c53b4309434cbc02ae8bf764fa83a6defbb719431242722aa7"
     )
-    assert audits[0].prompt_version == "typesafe-selection-v1"
+    assert audits[0].prompt_version == "typesafe-selection-v2"
+
+
+@pytest.mark.asyncio
+async def test_high_value_rejection_is_sent_to_luna_instead_of_being_blocked() -> None:
+    selector = _StubSelector(_decision(choice="reject", confidence=0.99))
+    delegate = _StubContentAI()
+    audits = []
+
+    async def record_audit(audit) -> None:
+        audits.append(audit)
+
+    content_ai = ClassifiedContentAI(
+        delegate,
+        selector,
+        min_reject_confidence=0.8,
+        shadow_mode=False,
+        audit_recorder=record_audit,
+    )
+
+    result = await content_ai.filter_and_rewrite("candidate", [], [])
+
+    assert result is not None
+    assert result.is_news is True
+    assert delegate.filter_calls == 1
+    assert audits[0].blocked is False
+    assert audits[0].block_reason == ""
+
+
+@pytest.mark.asyncio
+async def test_review_sample_checks_a_confident_rejection_without_publishing_it() -> None:
+    selector = _StubSelector(
+        _decision(
+            choice="reject",
+            confidence=0.98,
+            wow_relevance=0.08,
+            rejection_reason="not_wow",
+        ),
+    )
+    delegate = _StubContentAI()
+    audits = []
+    outcomes = []
+
+    async def record_audit(audit) -> None:
+        audits.append(audit)
+
+    async def record_outcome(content_sha256, content_kind, outcome) -> None:
+        outcomes.append((content_sha256, content_kind, outcome))
+
+    content_ai = ClassifiedContentAI(
+        delegate,
+        selector,
+        min_reject_confidence=0.8,
+        shadow_mode=False,
+        audit_recorder=record_audit,
+        outcome_recorder=record_outcome,
+        review_sample_rate=1.0,
+    )
+
+    result = await content_ai.filter_and_rewrite("candidate", [], [])
+
+    assert result is not None
+    assert result.is_news is False
+    assert delegate.filter_calls == 1
+    assert audits[0].blocked is False
+    assert outcomes[0][2] == "luna_would_accept"
+
+
+@pytest.mark.asyncio
+async def test_selector_records_luna_outcome_for_an_accepted_candidate() -> None:
+    selector = _StubSelector(_decision(choice="accept", confidence=0.98))
+    delegate = _StubContentAI()
+    outcomes = []
+
+    async def record_outcome(content_sha256, content_kind, outcome) -> None:
+        outcomes.append((content_sha256, content_kind, outcome))
+
+    content_ai = ClassifiedContentAI(
+        delegate,
+        selector,
+        min_reject_confidence=0.8,
+        shadow_mode=False,
+        outcome_recorder=record_outcome,
+    )
+
+    result = await content_ai.filter_and_rewrite("candidate", [], [])
+
+    assert result is not None
+    assert outcomes == [
+        (
+            "dda18a0e21ae47c53b4309434cbc02ae8bf764fa83a6defbb719431242722aa7",
+            "news",
+            "luna_accepted",
+        ),
+    ]
 
 
 @pytest.mark.asyncio

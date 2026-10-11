@@ -16,6 +16,7 @@ def test_load_allows_bot_api_mode_without_telethon_credentials(monkeypatch) -> N
     monkeypatch.delenv("EDITOR_URL", raising=False)
     monkeypatch.delenv("NEWS_SELECTOR_ENABLED", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("RSS_FEED_URLS", raising=False)
 
     cfg = config.load()
 
@@ -44,6 +45,7 @@ def test_loads_openrouter_news_selector(monkeypatch) -> None:
     monkeypatch.setenv("NEWS_SELECTOR_MODEL", "typesafe/jev-1.13")
     monkeypatch.setenv("NEWS_SELECTOR_SHADOW_MODE", "false")
     monkeypatch.setenv("NEWS_SELECTOR_MIN_REJECT_CONFIDENCE", "0.87")
+    monkeypatch.setenv("NEWS_SELECTOR_REVIEW_SAMPLE_RATE", "0.05")
 
     cfg = config.load()
 
@@ -52,6 +54,7 @@ def test_loads_openrouter_news_selector(monkeypatch) -> None:
     assert cfg.news_selector_model == "typesafe/jev-1.13"
     assert cfg.news_selector_shadow_mode is False
     assert cfg.news_selector_min_reject_confidence == pytest.approx(0.87)
+    assert cfg.news_selector_review_sample_rate == pytest.approx(0.05)
 
 
 def test_enabled_news_selector_requires_openrouter_key(monkeypatch) -> None:
@@ -106,6 +109,10 @@ def test_load_enables_daily_reddit_topics_with_existing_api_key(monkeypatch) -> 
     monkeypatch.setenv("SOCIAL_DISCOVERY_HOURS_UTC", "8,18")
     monkeypatch.setenv("GETXAPI_ENABLED", "true")
     monkeypatch.setenv("GETXAPI_KEY", "x-secret")
+    monkeypatch.delenv("REDDIT_MAX_POSTS_PER_RUN", raising=False)
+    monkeypatch.delenv("REDDIT_MAX_POSTS_PER_DAY", raising=False)
+    monkeypatch.delenv("X_MAX_POSTS_PER_RUN", raising=False)
+    monkeypatch.delenv("X_MAX_POSTS_PER_DAY", raising=False)
 
     cfg = config.load()
 

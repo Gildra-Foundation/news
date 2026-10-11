@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "aiogram>=3.4,<4",
+    "aiohttp>=3.9,<4",
     "aiosqlite>=0.19",
     "apscheduler>=3.10",
     "google-genai>=0.8",
@@ -32,6 +33,7 @@ dev = [
 gildranews = "gildranews.__main__:run"
 gildranews-api-keys = "gildranews.configure_keys:main"
 gildranews-eval = "gildranews.application.editorial_eval:main"
+gildranews-news-api = "gildranews.news_api:run"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -16,7 +16,7 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-MODEL = "gpt-5.6-luna"
+MODEL = "gpt-6-luna"
 MAX_REQUEST_BYTES = 256 * 1024
 MAX_MESSAGE_CHARS = 120_000
 DEFAULT_TIMEOUT_SECONDS = 240
@@ -89,6 +89,10 @@ def _codex_command(model: str, workspace: Path, result_path: Path) -> list[str]:
         "--skip-git-repo-check",
         "--sandbox",
         "read-only",
+        "--disable",
+        "shell_tool",
+        "--disable",
+        "unified_exec",
         "--model",
         model,
         "-c",
@@ -99,8 +103,6 @@ def _codex_command(model: str, workspace: Path, result_path: Path) -> list[str]:
         'permissions.gildranews.description="GildraNews completion-only runtime"',
         "-c",
         'permissions.gildranews.extends=":read-only"',
-        "-c",
-        'permissions.gildranews.filesystem."~/.codex"="deny"',
         "-c",
         "permissions.gildranews.network.enabled=false",
         "--cd",

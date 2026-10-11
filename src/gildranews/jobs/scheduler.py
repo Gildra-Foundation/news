@@ -97,6 +97,9 @@ class ScheduledJobs:
         if result["due"]:
             log.info("Processing retry queue: %s", result)
 
+    async def heartbeat(self) -> None:
+        await db.set_service_state("scheduler_heartbeat", "healthy")
+
     async def run_reddit_pipeline(self) -> None:
         async with self._pipeline_lock:
             result = await process_reddit.run_once(
@@ -205,6 +208,14 @@ class ScheduledJobs:
             max_instances=1,
             coalesce=True,
         )
+        self._scheduler.add_job(
+            self.heartbeat,
+            trigger="interval",
+            minutes=1,
+            id="scheduler_heartbeat",
+            max_instances=1,
+            coalesce=True,
+        )
         if self._cfg.interval_minutes > 0 and self._client is not None:
             self._scheduler.add_job(
                 self.run_pipeline,
@@ -269,6 +280,7 @@ class ScheduledJobs:
             "digest Sunday 18:00 UTC",
         )
 
+        self._start_task(self.heartbeat())
         self._start_task(self.retry_processing())
         if self._cfg.rss_enabled:
             self._start_task(self.run_rss_pipeline())

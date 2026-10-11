@@ -86,3 +86,51 @@ async def test_processing_retry_stops_after_five_failures(
     ) == []
     assert await processing_retries.counts() == {"pending": 0, "failed": 1}
     await sqlite.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_retry_can_be_listed_and_requeued_explicitly(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(sqlite, "DB_PATH", str(tmp_path / "newsbot.db"))
+    await sqlite.init()
+    now = datetime(2026, 9, 20, 18, 0, tzinfo=UTC)
+    retry_id = await processing_retries.enqueue(
+        source="wowhead",
+        external_id=382961,
+        payload_json="{}",
+        content_kind="news",
+        quota_source=None,
+        quota_day=None,
+        quota_limit=None,
+        error="presentation_issues",
+        expires_hours=24,
+        now=now,
+    )
+    for attempt in range(2, 6):
+        await processing_retries.reschedule(
+            retry_id,
+            error=f"presentation_issues attempt {attempt}",
+            now=now,
+        )
+
+    failed = await processing_retries.failed(limit=10)
+    requeued = await processing_retries.requeue_failed(retry_id, now=now)
+    due = await processing_retries.due(limit=10, now=now)
+
+    assert failed == [
+        {
+            "id": retry_id,
+            "source": "wowhead",
+            "external_id": 382961,
+            "attempts": 5,
+            "last_error": "presentation_issues attempt 5",
+            "updated_at": failed[0]["updated_at"],
+        },
+    ]
+    assert requeued is True
+    assert due[0]["id"] == retry_id
+    assert due[0]["attempts"] == 1
+    assert await processing_retries.counts() == {"pending": 1, "failed": 0}
+    await sqlite.close()

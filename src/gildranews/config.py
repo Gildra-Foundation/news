@@ -122,17 +122,21 @@ class Config:
     mtproto_publisher_enabled: bool = False
     rss_enabled: bool = True
     rss_feed_urls: tuple[str, ...] = DEFAULT_RSS_FEED_URLS
-    ai_provider: str = "app_server"
+    ai_provider: str = "anthropic"
     app_server_url: str = "http://agent-codex:4202/ag-ui"
     app_server_token: str = ""
-    app_server_model: str = "gpt-5.6-luna"
+    app_server_model: str = "gpt-6-luna"
     app_server_reasoning_effort: str = "xhigh"
     ai_timeout_seconds: int = 240
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-sonnet-5-5"
+    website_news_enabled: bool = False
     news_selector_enabled: bool = False
     openrouter_api_key: str = ""
     news_selector_model: str = "typesafe/jev-1.13"
     news_selector_shadow_mode: bool = True
     news_selector_min_reject_confidence: float = 0.8
+    news_selector_review_sample_rate: float = 0
     news_selector_timeout_seconds: int = 20
     editor_url: str = "http://editor-gateway:8080/v2/edit"
     editor_token: str = ""
@@ -165,9 +169,17 @@ def load() -> Config:
     target = _required("TARGET_CHANNEL")
     if not target.startswith("@") and not target.startswith("-100"):
         target = "@" + target
-    ai_provider = os.getenv("AI_PROVIDER", "app_server").strip().lower() or "app_server"
-    if ai_provider not in {"app_server", "gemini"}:
-        raise RuntimeError("AI_PROVIDER должен быть app_server или gemini")
+    ai_provider = os.getenv("AI_PROVIDER", "anthropic").strip().lower() or "anthropic"
+    if ai_provider not in {"app_server", "gemini", "anthropic"}:
+        raise RuntimeError("AI_PROVIDER должен быть anthropic, app_server или gemini")
+    anthropic_api_key = _secret(
+        "ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_FILE", "/app/data/anthropic_api_key",
+    )
+    if ai_provider == "anthropic" and not anthropic_api_key:
+        raise RuntimeError("Для AI_PROVIDER=anthropic необходимо задать ANTHROPIC_API_KEY")
+    website_news_enabled = _bool("WEBSITE_NEWS_ENABLED")
+    if website_news_enabled and ai_provider == "gemini":
+        raise RuntimeError("WEBSITE_NEWS_ENABLED требует AI_PROVIDER=anthropic или app_server")
     gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if ai_provider == "gemini" and not gemini_api_key:
         raise RuntimeError("Для AI_PROVIDER=gemini необходимо задать GEMINI_API_KEY")
@@ -245,11 +257,14 @@ def load() -> Config:
             "APP_SERVER_TOKEN_FILE",
             "/app/data/app_server_token",
         ),
-        app_server_model=os.getenv("APP_SERVER_MODEL", "gpt-5.6-luna").strip() or "gpt-5.6-luna",
+        app_server_model=os.getenv("APP_SERVER_MODEL", "gpt-6-luna").strip() or "gpt-6-luna",
         app_server_reasoning_effort=(
             os.getenv("APP_SERVER_REASONING_EFFORT", "xhigh").strip() or "xhigh"
         ),
         ai_timeout_seconds=_int("AI_TIMEOUT_SECONDS", 240),
+        anthropic_api_key=anthropic_api_key,
+        anthropic_model=(os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5-5").strip() or "claude-sonnet-5-5"),
+        website_news_enabled=website_news_enabled,
         news_selector_enabled=news_selector_enabled,
         openrouter_api_key=openrouter_api_key,
         news_selector_model=(
@@ -262,6 +277,12 @@ def load() -> Config:
             0.8,
             minimum=0.5,
             maximum=1.0,
+        ),
+        news_selector_review_sample_rate=_bounded_float(
+            "NEWS_SELECTOR_REVIEW_SAMPLE_RATE",
+            0,
+            minimum=0,
+            maximum=0.2,
         ),
         news_selector_timeout_seconds=_bounded_int(
             "NEWS_SELECTOR_TIMEOUT_SECONDS", 20, minimum=2, maximum=120,

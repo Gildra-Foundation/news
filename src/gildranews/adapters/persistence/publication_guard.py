@@ -153,10 +153,11 @@ async def complete_publication(
     title: str,
     body: str,
     target_message_id: int | None,
+    website_source: dict | None = None,
 ) -> None:
     if reservation_id is None:
         await sqlite.record_published(
-            channel, message_id, title, body, target_message_id,
+            channel, message_id, title, body, target_message_id, website_source,
         )
         return
     db = await sqlite._get_conn()
@@ -171,7 +172,7 @@ async def complete_publication(
                 row = await cursor.fetchone()
             if row is None:
                 raise RuntimeError("Резерв публикации не найден")
-            await db.execute(
+            inserted = await db.execute(
                 """INSERT INTO published_posts(
                        channel, message_id, title, body, target_message_id,
                        story_key, revision_key, fingerprint_json
@@ -181,6 +182,10 @@ async def complete_publication(
                     target_message_id, row[0], row[1], row[2],
                 ),
             )
+            if website_source is not None:
+                from gildranews.adapters.persistence.site_news import enqueue
+
+                await enqueue(db, inserted.lastrowid, website_source)
             await db.execute(
                 """UPDATE publication_candidates
                    SET status='published', target_message_id=?,

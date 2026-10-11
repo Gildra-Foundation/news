@@ -6,14 +6,16 @@ import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from gildranews.adapters.ai import gemini
+from gildranews.adapters.ai.anthropic import AnthropicClient, AnthropicError
 from gildranews.adapters.ai.app_server import AppServerClient, AppServerError
 from gildranews.adapters.ai.news_selector import (
     ClassifiedContentAI,
     OpenRouterNewsSelector,
     SelectionAuditRecorder,
+    SelectionOutcomeRecorder,
 )
 from gildranews.adapters.ai.prompts import WOW_CLASS_TERMINOLOGY
 from gildranews.adapters.editor.manacost import EditorClient
@@ -83,8 +85,25 @@ _ANALYSIS_JSON_SUFFIX = """
 
 ЭТАП 1 — ОТБОР И КАРТА ФАКТОВ. На этом этапе не пиши публичный пост.
 Верни только JSON без Markdown и пояснений:
-{"is_news":true,"reason":"...","emoji_theme":"...","evidence":[{"quote":"точная цитата из post","importance":"essential"}],"fingerprint":{"game_branch":"retail","version":"12.2.5","subject":"стабильное название события","action":"изменить механику","status":"testing","effective_date":"","scope":[],"material_facts":[]}}
+{"is_news":true,"reason":"конкретная новизна и польза игроку","news_value":"practical","emoji_theme":"...","evidence":[{"quote":"точная цитата из post","importance":"essential"}],"fingerprint":{"game_branch":"retail","version":"12.2.5","subject":"стабильное название события","action":"изменить механику","status":"testing","effective_date":"","scope":[],"material_facts":[]}}
+news_value: major — релиз, официальный анонс, большой патч или серьёзный сбой;
+practical — конкретное изменение механики, баланса, доступности, награды или срока;
+discovery — подтверждённая находка или воспроизводимый полезный приём;
+none — повтор, реклама, подборка без нового события, слух или мнение без проверяемой пользы.
+При news_value=none отклоняй материал. Сам факт выхода новой статьи или популярность
+обсуждения не являются новостью. Новая косметическая награда со способом получения —
+полезна; повторная демонстрация уже известной модели без новых деталей — нет.
+Анонс дополнения не отклоняй как рекламу. Официальный статус источника не заменяет новизну.
+В reason назови новый факт и его пользу, а не «интересно игрокам» или «актуальная тема».
+Для повторного сюжета принимай только существенное дополнение: изменившиеся условия,
+срок, награду, механику либо переход от анонса или тестирования к подтверждённому релизу.
+Иная формулировка, новый источник, скриншот или напоминание без новых деталей — news_value=none.
+Не называй старый материал новой находкой только потому, что его снова опубликовали.
+Дату публикации не превращай в дату события; неподтверждённое «сегодня» не добавляй.
 Для принятого материала fingerprint обязателен. evidence содержит до 12 коротких точных цитат из post: essential — без факта пост станет неверным или неполным, context — факт только помогает понять событие. Не переводи и не пересказывай quote. Для отклонённого материала верни evidence=[] и fingerprint=null.
+game_branch — retail, classic или forever. WoW: Forever и WoW Forever относятся к
+forever, а не к classic, даже когда статья сравнивает игру с Season of Discovery.
+Определяй ветку по самому событию, а не по упоминанию другой версии в историческом контексте.
 """
 
 _DRAFT_JSON_SUFFIX = """
@@ -106,6 +125,7 @@ _RUSSIAN_REPAIR_PROMPT = """Ты — выпускающий редактор р�
 — имена существ и персонажей без точного перевода запиши кириллицей;
 — официальные английские названия дополнений сохраняй без перевода и без склонения;
 — если материал относится к WoW: Forever, обязательно сохрани это название в title или body и добавь для него reference типа expansion с веткой forever;
+— не объясняй автоматически, что WoW: Forever относится к Classic: упоминай связь только когда она важна для новости или source_text прямо сравнивает эти версии;
 — не оставляй другую латиницу, кроме Blizzard, WoW, World of Warcraft и официального названия WoW: Forever;
 — убери перечисленные artificial_style_markers и любые редакторские комментарии о самом материале;
 — исправь перечисленные presentation_issues: не повторяй заголовок в начале, раздели плотный текст и сократи body до 650 символов;
@@ -122,7 +142,8 @@ _RUSSIAN_REPAIR_PROMPT = """Ты — выпускающий редактор р�
 — если способность лечит другие цели на процент от своего лечения, прямо назови способность, цели и от чего считается процент;
 — recent_published используй как индекс уже опубликованных сюжетов: оставь в центре только новый факт;
 — recent_voice_examples задают только длину и ритм канала; не копируй из них формулировки;
-— если branch_context_issues содержит retail_branch_not_explained, прямо напиши «основная версия WoW» и поясни, что это не Classic; для classic_branch_not_explained назови точную ветку Classic из source_text;
+— если branch_context_issues содержит retail_branch_not_explained, естественно упомяни «актуальная версия WoW»; не сравнивай её с Classic, если source_text прямо не сравнивает версии; для classic_branch_not_explained назови точную ветку Classic из source_text;
+— для forever_branch_not_explained явно сохрани «WoW: Forever» в title или body. Сверь ветку, статус события и основные факты с переданными fingerprint и verified_evidence;
 — не используй «важно отметить», «таким образом», «данный материал», «открывает новые возможности» и итоговый вывод ради вывода;
 — сохрани без изменений все числа, версии, отрицания, статус события и причинно-следственные связи;
 — ничего не добавляй из памяти и не указывай источник.
@@ -161,6 +182,16 @@ class _FingerprintOutput(BaseModel):
     scope: list[str] = Field(default_factory=list, max_length=12)
     material_facts: list[str] = Field(default_factory=list, max_length=12)
 
+    @field_validator("game_branch", mode="before")
+    @classmethod
+    def normalize_combined_game_branch(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip().lower() in {
+            "retail_and_classic",
+            "classic_and_retail",
+        }:
+            return "retail"
+        return value
+
 
 class _EvidenceOutput(BaseModel):
     quote: str = Field(min_length=1, max_length=1000)
@@ -170,6 +201,7 @@ class _EvidenceOutput(BaseModel):
 class _AnalysisOutput(BaseModel):
     is_news: bool
     reason: str
+    news_value: Literal["major", "practical", "discovery", "none"]
     emoji_theme: str = ""
     evidence: list[_EvidenceOutput] = Field(default_factory=list, max_length=12)
     fingerprint: _FingerprintOutput | None = None
@@ -203,11 +235,11 @@ def _verified_evidence(source: str, evidence: list[_EvidenceOutput]) -> list[_Ev
     verified = [
         item
         for item in evidence
-        if re.sub(r"\s+", " ", item.quote).strip().casefold() in source_key
+        if item.quote.strip() and re.sub(r"\s+", " ", item.quote).strip().casefold() in source_key
     ]
     if len(verified) != len(evidence):
         log.warning(
-            "luna_evidence_rejected unsupported=%d total=%d",
+            "content_evidence_rejected unsupported=%d total=%d",
             len(evidence) - len(verified),
             len(evidence),
         )
@@ -421,10 +453,25 @@ def _editorial_issues(
     return {name: values for name, values in issues.items() if values}
 
 
-class AppServerContentAI:
-    """Luna-backed content adapter over the server's AG-UI endpoint."""
+_BLOCKING_EDITORIAL_ISSUES = frozenset(
+    {"specialization_issues", "branch_context_issues"},
+)
 
-    def __init__(self, app_server: AppServerClient, editor: EditorClient | None = None) -> None:
+
+def _blocking_editorial_issues(
+    issues: dict[str, tuple[str, ...]],
+) -> dict[str, tuple[str, ...]]:
+    return {
+        name: values
+        for name, values in issues.items()
+        if name in _BLOCKING_EDITORIAL_ISSUES
+    }
+
+
+class AppServerContentAI:
+    """Shared evidence and editorial pipeline for AG-UI and Claude Messages."""
+
+    def __init__(self, app_server: AppServerClient | AnthropicClient, editor: EditorClient | None = None) -> None:
         self._app_server = app_server
         self._editor = editor
 
@@ -435,18 +482,18 @@ class AppServerContentAI:
             try:
                 raw = await self._app_server.complete(prompt, serialized_payload)
                 return schema.model_validate(_json_object(raw))
-            except AppServerError:
-                log.warning("Luna App Server request failed", exc_info=True)
+            except (AppServerError, AnthropicError):
+                log.warning("Content AI request failed", exc_info=True)
                 raise
             except (TypeError, ValueError, ValidationError) as exc:
                 last_error = exc
                 log.warning(
-                    "Luna returned an invalid structured response (attempt %d/2)",
+                    "Content AI returned an invalid structured response (attempt %d/2)",
                     attempt + 1,
                     exc_info=True,
                 )
         raise InvalidAIResponseError(
-            "Luna дважды вернула ответ, который не прошёл проверку JSON",
+            "Модель дважды вернула ответ, который не прошёл проверку JSON",
         ) from last_error
 
     async def _finish_rewrite(
@@ -464,7 +511,7 @@ class AppServerContentAI:
         qa = check_translation(source, before_editor)
         if verify_translation and not qa.ready_for_editor:
             log.warning(
-                "Translation QA rejected Luna output: missing_numbers=%s missing_links=%s code=%s",
+                "Translation QA rejected content AI output: missing_numbers=%s missing_links=%s code=%s",
                 qa.missing_numbers,
                 qa.missing_links,
                 qa.code_spans_match,
@@ -503,16 +550,20 @@ class AppServerContentAI:
             _AnalysisOutput,
         )
         if not isinstance(analysis, _AnalysisOutput):
-            raise InvalidAIResponseError("Luna не вернула результат анализа новости")
-        if not analysis.is_news:
+            raise InvalidAIResponseError("Модель не вернула результат анализа новости")
+        if not analysis.is_news or analysis.news_value == "none":
             return FilterResult(is_news=False, reason=analysis.reason.strip())
         fingerprint = _event_fingerprint(analysis.fingerprint)
         if fingerprint is None:
-            log.warning("Luna accepted a story without a valid event fingerprint")
+            log.warning("Content AI accepted a story without a valid event fingerprint")
             raise InvalidAIResponseError(
-                "Luna не вернула обязательный отпечаток события",
+                "Модель не вернула обязательный отпечаток события",
             )
         verified_evidence = _verified_evidence(text, analysis.evidence)
+        if not any(item.importance == "essential" for item in verified_evidence):
+            raise InvalidAIResponseError("Карта фактов не содержит подтверждённой основной цитаты")
+        if any(item.importance == "essential" and item not in verified_evidence for item in analysis.evidence):
+            raise InvalidAIResponseError("Основная цитата карты фактов отсутствует в исходнике")
         output = await self._complete(
             gemini._filter_prompt(content_kind) + _DRAFT_JSON_SUFFIX,
             {
@@ -528,15 +579,17 @@ class AppServerContentAI:
             _RewriteOutput,
         )
         if not isinstance(output, _RewriteOutput):
-            raise InvalidAIResponseError("Luna не вернула черновик новости")
+            raise InvalidAIResponseError("Модель не вернула черновик новости")
         rewrite = await self._finish_rewrite(text, output)
         if rewrite is None:
             raise InvalidAIResponseError(
-                "Текст Luna не прошёл проверку сохранности фактов",
+                "Текст AI не прошёл проверку сохранности фактов",
             )
         issues = _editorial_issues(text, rewrite, fingerprint.game_branch)
-        for repair_attempt in range(1, 3):
+        for repair_attempt in range(1, 4):
             if not issues:
+                break
+            if repair_attempt > 1 and not _blocking_editorial_issues(issues):
                 break
             log.info(
                 "editorial_repair_requested attempt=%d issues=%s",
@@ -547,6 +600,8 @@ class AppServerContentAI:
                 _RUSSIAN_REPAIR_PROMPT,
                 {
                     "source_text": text[:12_000],
+                    "fingerprint": analysis.fingerprint.model_dump(mode="json"),
+                    "verified_evidence": [item.model_dump(mode="json") for item in verified_evidence],
                     "draft_title": rewrite.title,
                     "draft_body": rewrite.body,
                     "untranslated_terms": list(issues.get("untranslated_terms", ())),
@@ -570,7 +625,7 @@ class AppServerContentAI:
             )
             if not isinstance(repaired_output, _RewriteOutput):
                 raise InvalidAIResponseError(
-                    "Luna не вернула исправленный редакторский текст",
+                    "Модель не вернула исправленный редакторский текст",
                 )
             repaired = await self._finish_rewrite(
                 f"{rewrite.title}\n\n{rewrite.body}",
@@ -607,10 +662,16 @@ class AppServerContentAI:
                     repair_attempt,
                     sorted(issues),
                 )
-        if issues:
-            issue_names = ", ".join(sorted(issues))
+        blocking_issues = _blocking_editorial_issues(issues)
+        if blocking_issues:
+            issue_names = ", ".join(sorted(blocking_issues))
             raise InvalidAIResponseError(
-                "Текст Luna не прошёл редакционную проверку: " + issue_names,
+                "Текст AI не прошёл редакционную проверку: " + issue_names,
+            )
+        if issues:
+            log.warning(
+                "editorial_non_blocking_issues issues=%s",
+                sorted(issues),
             )
         return FilterResult(
             is_news=True,
@@ -666,6 +727,11 @@ class AppServerContentAI:
         output = await self._complete(gemini.DIGEST_PROMPT, {"posts": posts}, _DigestOutput)
         return output if isinstance(output, _DigestOutput) else None
 
+    async def make_website_article(self, source_text: str):
+        from gildranews.application.site_articles import generate_article
+
+        return await generate_article(self._app_server, self._editor, source_text)
+
     async def aclose(self) -> None:
         await self._app_server.aclose()
         if self._editor is not None:
@@ -705,11 +771,16 @@ def build_content_ai(
     cfg: Config,
     *,
     selector_audit: SelectionAuditRecorder | None = None,
+    selector_outcome: SelectionOutcomeRecorder | None = None,
 ):
     if cfg.ai_provider == "gemini":
         content_ai = GeminiContentAI(cfg.gemini_api_key, cfg.gemini_model)
     else:
-        app_server = AppServerClient(
+        app_server = AnthropicClient(
+            api_key=cfg.anthropic_api_key,
+            model=cfg.anthropic_model,
+            timeout_seconds=cfg.ai_timeout_seconds,
+        ) if cfg.ai_provider == "anthropic" else AppServerClient(
             endpoint=cfg.app_server_url,
             token=cfg.app_server_token,
             model=cfg.app_server_model,
@@ -738,4 +809,6 @@ def build_content_ai(
         min_reject_confidence=cfg.news_selector_min_reject_confidence,
         shadow_mode=cfg.news_selector_shadow_mode,
         audit_recorder=selector_audit,
+        outcome_recorder=selector_outcome,
+        review_sample_rate=cfg.news_selector_review_sample_rate,
     )

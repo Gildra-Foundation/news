@@ -45,7 +45,9 @@ CREATE TABLE IF NOT EXISTS runs (
     fetched INTEGER,
     selected INTEGER,
     published INTEGER,
-    error TEXT
+    error TEXT,
+    pipeline TEXT NOT NULL DEFAULT 'unknown',
+    duration_ms INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS ai_decisions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -321,9 +323,36 @@ async def _migration_2(db: aiosqlite.Connection) -> None:
     )
 
 
+async def _migration_3(db: aiosqlite.Connection) -> None:
+    run_columns = await _column_names(db, "runs")
+    await _add_column(
+        db,
+        "runs",
+        run_columns,
+        "pipeline",
+        "TEXT NOT NULL DEFAULT 'unknown'",
+    )
+    await _add_column(
+        db,
+        "runs",
+        run_columns,
+        "duration_ms",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+
+
+async def _migration_4(db: aiosqlite.Connection) -> None:
+    from gildranews.adapters.persistence.site_news import SCHEMA_STATEMENTS
+
+    for statement in SCHEMA_STATEMENTS:
+        await db.execute(statement)
+
+
 _MIGRATIONS = (
     (1, "legacy_columns_and_source_quotas", _migration_1),
     (2, "ai_decision_audit", _migration_2),
+    (3, "run_pipeline_duration", _migration_3),
+    (4, "website_news_outbox", _migration_4),
 )
 MIGRATION_IDENTITIES = tuple((version, name) for version, name, _ in _MIGRATIONS)
 CURRENT_SCHEMA_VERSION = max(version for version, _, _ in _MIGRATIONS)
@@ -427,12 +456,28 @@ async def release_claim(channel: str, message_id: int) -> None:
 
 
 # ---------- Runs ----------
-async def record_run(fetched: int, selected: int, published: int, error: str | None) -> None:
+async def record_run(
+    fetched: int,
+    selected: int,
+    published: int,
+    error: str | None,
+    *,
+    pipeline: str = "unknown",
+    duration_ms: int = 0,
+) -> None:
     db = await _get_conn()
     await db.execute(
-        """INSERT INTO runs(finished_at, fetched, selected, published, error)
-           VALUES (CURRENT_TIMESTAMP, ?, ?, ?, ?)""",
-        (fetched, selected, published, error),
+        """INSERT INTO runs(
+               finished_at, fetched, selected, published, error, pipeline, duration_ms
+           ) VALUES (CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?)""",
+        (
+            fetched,
+            selected,
+            published,
+            error,
+            pipeline[:30] or "unknown",
+            max(0, duration_ms),
+        ),
     )
     await db.commit()
 
@@ -440,14 +485,50 @@ async def record_run(fetched: int, selected: int, published: int, error: str | N
 async def last_run() -> dict | None:
     db = await _get_conn()
     async with db.execute(
-        "SELECT started_at, finished_at, fetched, selected, published, error "
+        "SELECT started_at, finished_at, fetched, selected, published, error, "
+        "pipeline, duration_ms "
         "FROM runs ORDER BY id DESC LIMIT 1"
     ) as cur:
         row = await cur.fetchone()
     if not row:
         return None
-    keys = ["started_at", "finished_at", "fetched", "selected", "published", "error"]
+    keys = [
+        "started_at",
+        "finished_at",
+        "fetched",
+        "selected",
+        "published",
+        "error",
+        "pipeline",
+        "duration_ms",
+    ]
     return dict(zip(keys, row))
+
+
+async def run_summary(hours: int = 24) -> dict[str, int]:
+    db = await _get_conn()
+    bounded_hours = max(1, min(hours, 24 * 30))
+    async with db.execute(
+        """SELECT COUNT(*),
+                  COALESCE(SUM(error IS NOT NULL AND error <> ''), 0),
+                  COALESCE(SUM(pipeline <> 'unknown'), 0),
+                  COALESCE(ROUND(AVG(
+                      CASE WHEN pipeline <> 'unknown' THEN duration_ms END
+                  )), 0),
+                  COALESCE(MAX(
+                      CASE WHEN pipeline <> 'unknown' THEN duration_ms END
+                  ), 0)
+           FROM runs WHERE started_at >= datetime('now', ?)""",
+        (f"-{bounded_hours} hours",),
+    ) as cursor:
+        row = await cursor.fetchone()
+    return {
+        "runs": int(row[0]),
+        "runs_with_errors": int(row[1]),
+        "measured_runs": int(row[2]),
+        "avg_duration_ms": int(row[3]),
+        "max_duration_ms": int(row[4]),
+    }
 
 
 async def record_news_selector_decision(record: SelectionAuditRecord) -> None:
@@ -459,6 +540,9 @@ async def record_news_selector_decision(record: SelectionAuditRecord) -> None:
         "threshold": record.threshold,
         "shadow_mode": record.shadow_mode,
         "blocked": record.blocked,
+        "block_reason": record.block_reason,
+        "rejection_reason": record.rejection_reason,
+        "review_sampled": record.review_sampled,
         "error": record.error,
     }
     await db.execute(
@@ -482,6 +566,34 @@ async def record_news_selector_decision(record: SelectionAuditRecord) -> None:
     await db.commit()
 
 
+async def record_news_selector_outcome(
+    content_sha256: str,
+    content_kind: str,
+    outcome: str,
+) -> None:
+    """Attach Luna's result to the most recent TypeSafe decision for a candidate."""
+    db = await _get_conn()
+    async with db.execute(
+        """SELECT id, detail_json FROM ai_decisions
+           WHERE content_sha256 = ? AND content_kind = ? AND stage = 'selection'
+           ORDER BY id DESC LIMIT 1""",
+        (content_sha256, content_kind),
+    ) as cursor:
+        row = await cursor.fetchone()
+    if row is None:
+        return
+    try:
+        detail = json.loads(row[1])
+    except (TypeError, json.JSONDecodeError):
+        detail = {}
+    detail["outcome"] = outcome
+    await db.execute(
+        "UPDATE ai_decisions SET detail_json = ? WHERE id = ?",
+        (json.dumps(detail, ensure_ascii=False, sort_keys=True), row[0]),
+    )
+    await db.commit()
+
+
 async def news_selector_summary(hours: int = 24) -> dict[str, int | float | str]:
     db = await _get_conn()
     bounded_hours = max(1, min(hours, 24 * 30))
@@ -491,6 +603,15 @@ async def news_selector_summary(hours: int = 24) -> dict[str, int | float | str]
                   COALESCE(SUM(decision = 'reject'), 0),
                   COALESCE(SUM(decision = 'error'), 0),
                   COALESCE(SUM(json_extract(detail_json, '$.blocked') = 1), 0),
+                  COALESCE(SUM(json_extract(detail_json, '$.blocked') = 1 AND json_extract(detail_json, '$.block_reason') = 'not_wow'), 0),
+                  COALESCE(SUM(json_extract(detail_json, '$.blocked') = 1 AND json_extract(detail_json, '$.block_reason') = 'low_substance'), 0),
+                  COALESCE(SUM(json_extract(detail_json, '$.blocked') = 1 AND json_extract(detail_json, '$.block_reason') = 'promotional'), 0),
+                  COALESCE(SUM(json_extract(detail_json, '$.outcome') = 'luna_accepted'), 0),
+                  COALESCE(SUM(json_extract(detail_json, '$.outcome') = 'luna_filtered'), 0),
+                  COALESCE(SUM(json_extract(detail_json, '$.outcome') = 'luna_error'), 0),
+                  COALESCE(SUM(json_extract(detail_json, '$.outcome') = 'luna_would_accept'), 0),
+                  COALESCE(SUM(json_extract(detail_json, '$.outcome') = 'typesafe_blocked'), 0),
+                  COALESCE(SUM(json_extract(detail_json, '$.review_sampled') = 1), 0),
                   COALESCE(SUM(cost), 0),
                   COALESCE(MAX(created_at), '')
            FROM ai_decisions
@@ -504,8 +625,21 @@ async def news_selector_summary(hours: int = 24) -> dict[str, int | float | str]
         "rejected": int(row[2]),
         "errors": int(row[3]),
         "blocked": int(row[4]),
-        "cost": float(row[5]),
-        "last_decision_at": str(row[6]),
+        "blocked_not_wow": int(row[5]),
+        "blocked_low_substance": int(row[6]),
+        "blocked_promotional": int(row[7]),
+        "blocked_unclassified": max(
+            0,
+            int(row[4]) - int(row[5]) - int(row[6]) - int(row[7]),
+        ),
+        "luna_accepted": int(row[8]),
+        "luna_filtered": int(row[9]),
+        "luna_errors": int(row[10]),
+        "luna_would_accept": int(row[11]),
+        "typesafe_blocked": int(row[12]),
+        "review_sampled": int(row[13]),
+        "cost": float(row[14]),
+        "last_decision_at": str(row[15]),
     }
 
 
@@ -526,14 +660,23 @@ async def record_published(
     title: str,
     body: str,
     target_message_id: int | None = None,
+    website_source: dict | None = None,
 ) -> None:
     db = await _get_conn()
-    await db.execute(
-        "INSERT INTO published_posts(channel, message_id, title, body, target_message_id) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (_normalize(channel), message_id, title, body, target_message_id),
-    )
-    await db.commit()
+    try:
+        cursor = await db.execute(
+            "INSERT INTO published_posts(channel, message_id, title, body, target_message_id) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (_normalize(channel), message_id, title, body, target_message_id),
+        )
+        if website_source is not None:
+            from gildranews.adapters.persistence.site_news import enqueue
+
+            await enqueue(db, cursor.lastrowid, website_source)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
 
 
 async def recent_published_for_digest(days: int = 7) -> list[dict]:

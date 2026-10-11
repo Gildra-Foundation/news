@@ -1,4 +1,40 @@
 services:
+  news-api:
+    profiles: [website]
+    depends_on:
+      newsbot:
+        condition: service_healthy
+    build: .
+    image: newsbot:latest
+    command: ["python", "-m", "gildranews.news_api"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NEWS_API_BIND: 0.0.0.0
+      NEWS_API_PORT: "8088"
+      APP_SERVER_URL: http://host.docker.internal:4202/ag-ui
+      APP_SERVER_TOKEN_FILE: /app/data/app_server_token
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "127.0.0.1:8088:8088"
+    init: true
+    stop_grace_period: 15s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8088/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    mem_limit: 256m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
   newsbot:
     build: .
     image: newsbot:latest

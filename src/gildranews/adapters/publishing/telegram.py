@@ -69,6 +69,32 @@ def _is_admin(message: Message, admin_id: int) -> bool:
     return admin_id != 0 and message.from_user is not None and message.from_user.id == admin_id
 
 
+def _format_duration_ms(duration_ms: int) -> str:
+    bounded = max(0, duration_ms)
+    if bounded < 1000:
+        return f"{bounded} мс"
+    seconds = bounded / 1000
+    if seconds < 60:
+        return f"{seconds:.1f} с".replace(".", ",")
+    minutes, remaining_seconds = divmod(round(seconds), 60)
+    return f"{minutes} мин {remaining_seconds} с"
+
+
+def _format_failed_retries(retries: Sequence[dict]) -> str:
+    if not retries:
+        return "Остановленных материалов нет."
+    lines = ["<b>Остановленные материалы</b>"]
+    for retry in retries:
+        error = escape(str(retry["last_error"])[:180])
+        source = escape(str(retry["source"]))
+        lines.append(
+            f"<code>{retry['id']}</code> · {source}/{retry['external_id']} · "
+            f"{retry['attempts']} попыток\n{error}\n"
+            f"Повторить: <code>/retry_failed {retry['id']}</code>",
+        )
+    return "\n\n".join(lines)
+
+
 def make_bot(token: str) -> Bot:
     return Bot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
@@ -95,6 +121,8 @@ def make_dispatcher(admin_id: int, target_channel: str) -> Dispatcher:
             "/add @канал — добавить источник\n"
             "/remove @канал — удалить источник\n"
             "/status — последний прогон\n"
+            "/retries — остановленные материалы\n"
+            "/retry_failed ID — повторить остановленный материал\n"
             "/emojis — состояние игровых эмодзи\n"
             "/emoji_retry ID — повторить загрузку\n"
             "/emoji_disable ID — отключить загрузку\n"
@@ -146,14 +174,39 @@ def make_dispatcher(admin_id: int, target_channel: str) -> Dispatcher:
             await message.answer("Прогонов ещё не было.")
             return
         retries = await retry_store.counts()
+        run_metrics = await db.run_summary(hours=24)
+        heartbeat = await db.get_service_state("scheduler_heartbeat")
         selector = await db.news_selector_summary(hours=24)
+        error_rate = (
+            run_metrics["runs_with_errors"] / run_metrics["runs"] * 100
+            if run_metrics["runs"]
+            else 0
+        )
         lines = [
-            f"Последний прогон: {run['finished_at'] or run['started_at']}",
+            (
+                f"Последний прогон ({run['pipeline']}): "
+                f"{run['finished_at'] or run['started_at']} · "
+                f"{_format_duration_ms(run['duration_ms'])}"
+            ),
             f"Получено: {run['fetched']}",
             f"Отобрано ИИ: {run['selected']}",
             f"Опубликовано: {run['published']}",
             f"Очередь повторов: {retries['pending']}",
             f"Остановлено после ошибок: {retries['failed']}",
+            (
+                f"За 24 часа: {run_metrics['runs']} прогонов, "
+                f"ошибок {run_metrics['runs_with_errors']} ({error_rate:.1f}%)"
+            ),
+            (
+                "Время обработки: в среднем "
+                f"{_format_duration_ms(run_metrics['avg_duration_ms'])}, максимум "
+                f"{_format_duration_ms(run_metrics['max_duration_ms'])} "
+                f"(измерено: {run_metrics['measured_runs']})"
+            ),
+            (
+                "Heartbeat планировщика: "
+                f"{heartbeat['updated_at'] if heartbeat else 'нет данных'}"
+            ),
         ]
         if selector["total"]:
             lines.extend(
@@ -163,8 +216,24 @@ def make_dispatcher(admin_id: int, target_channel: str) -> Dispatcher:
                         f"{selector['total']} решений, {selector['blocked']} заблокировано"
                     ),
                     (
+                        "Причины блокировки: "
+                        f"не WoW — {selector['blocked_not_wow']}, "
+                        f"мало фактов — {selector['blocked_low_substance']}, "
+                        f"реклама — {selector['blocked_promotional']}, "
+                        f"без категории — {selector['blocked_unclassified']}"
+                    ),
+                    (
                         f"Отбор: {selector['accepted']} принято, "
                         f"{selector['rejected']} отклонено, {selector['errors']} ошибок"
+                    ),
+                    (
+                        f"Luna после TypeSafe: {selector['luna_accepted']} принято, "
+                        f"{selector['luna_filtered']} отклонено, "
+                        f"{selector['luna_errors']} ошибок"
+                    ),
+                    (
+                        f"Контрольная выборка: {selector['review_sampled']}; "
+                        f"Luna приняла бы {selector['luna_would_accept']}"
                     ),
                     f"Стоимость отбора: ${selector['cost']:.6f}",
                 ]
@@ -172,6 +241,28 @@ def make_dispatcher(admin_id: int, target_channel: str) -> Dispatcher:
         if run["error"]:
             lines.append(f"Ошибка: {run['error']}")
         await message.answer("\n".join(lines))
+
+    @dp.message(Command("retries"))
+    async def cmd_retries(message: Message) -> None:
+        if not _is_admin(message, admin_id):
+            return
+        await message.answer(_format_failed_retries(await retry_store.failed(limit=10)))
+
+    @dp.message(Command("retry_failed"))
+    async def cmd_retry_failed(message: Message) -> None:
+        if not _is_admin(message, admin_id):
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) != 2 or not parts[1].isdigit():
+            await message.answer("Использование: <code>/retry_failed ID</code>")
+            return
+        retry_id = int(parts[1])
+        if await retry_store.requeue_failed(retry_id):
+            await message.answer(
+                f"Материал <code>{retry_id}</code> поставлен в очередь повторно.",
+            )
+        else:
+            await message.answer("Остановленный материал с таким ID не найден.")
 
     @dp.message(Command("emojis"))
     async def cmd_emojis(message: Message) -> None:

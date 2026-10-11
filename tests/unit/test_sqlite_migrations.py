@@ -9,6 +9,49 @@ from gildranews.adapters.persistence import sqlite
 
 
 @pytest.mark.asyncio
+async def test_run_metrics_include_pipeline_duration_and_error_rate(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    await sqlite.close()
+    monkeypatch.setattr(sqlite, "DB_PATH", str(tmp_path / "newsbot.db"))
+    await sqlite.init()
+    try:
+        await sqlite.record_run(
+            7,
+            2,
+            1,
+            None,
+            pipeline="rss",
+            duration_ms=1250,
+        )
+        await sqlite.record_run(
+            3,
+            0,
+            0,
+            "AI timeout",
+            pipeline="rss",
+            duration_ms=240_000,
+        )
+
+        latest = await sqlite.last_run()
+        summary = await sqlite.run_summary(hours=24)
+
+        assert latest is not None
+        assert latest["pipeline"] == "rss"
+        assert latest["duration_ms"] == 240_000
+        assert summary == {
+            "runs": 2,
+            "runs_with_errors": 1,
+            "measured_runs": 2,
+            "avg_duration_ms": 120_625,
+            "max_duration_ms": 240_000,
+        }
+    finally:
+        await sqlite.close()
+
+
+@pytest.mark.asyncio
 async def test_fresh_database_records_every_schema_migration(monkeypatch, tmp_path) -> None:
     await sqlite.close()
     monkeypatch.setattr(sqlite, "DB_PATH", str(tmp_path / "newsbot.db"))
@@ -96,6 +139,8 @@ async def test_selector_decision_is_persisted_without_source_text(monkeypatch, t
                 threshold=0.9,
                 shadow_mode=False,
                 blocked=True,
+                block_reason="not_wow",
+                rejection_reason="not_wow",
             )
         )
         db = await sqlite._get_conn()
@@ -109,10 +154,23 @@ async def test_selector_decision_is_persisted_without_source_text(monkeypatch, t
             "a" * 64,
             "reject",
             "typesafe/jev-1.13",
-            "typesafe-selection-v1",
+            "typesafe-selection-v2",
         )
         assert '"blocked": true' in row[4]
+        assert '"rejection_reason": "not_wow"' in row[4]
         assert "source text" not in row[4]
+
+        await sqlite.record_news_selector_outcome(
+            "a" * 64,
+            "news",
+            "luna_accepted",
+        )
+        async with db.execute(
+            "SELECT detail_json FROM ai_decisions WHERE content_sha256 = ?",
+            ("a" * 64,),
+        ) as cursor:
+            outcome_row = await cursor.fetchone()
+        assert '"outcome": "luna_accepted"' in outcome_row[0]
 
         summary = await sqlite.news_selector_summary(hours=24)
         assert summary == {
@@ -121,6 +179,16 @@ async def test_selector_decision_is_persisted_without_source_text(monkeypatch, t
             "rejected": 1,
             "errors": 0,
             "blocked": 1,
+            "blocked_not_wow": 1,
+            "blocked_low_substance": 0,
+            "blocked_promotional": 0,
+            "blocked_unclassified": 0,
+            "luna_accepted": 1,
+            "luna_filtered": 0,
+            "luna_errors": 0,
+            "luna_would_accept": 0,
+            "typesafe_blocked": 0,
+            "review_sampled": 0,
             "cost": pytest.approx(0.00001),
             "last_decision_at": summary["last_decision_at"],
         }
